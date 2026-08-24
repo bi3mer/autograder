@@ -1,0 +1,65 @@
+name: Build and deploy to GitHub Pages
+
+on:
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  pages: write
+  id-token: write
+
+# One deploy at a time. Queue a push that lands mid-deploy rather than
+# cancelling it, so the site never ends up serving a half-uploaded tree.
+concurrency:
+  group: pages
+  cancel-in-progress: false
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+
+      - run: npm ci
+
+      - name: Typecheck the JSDoc types
+        run: npm run typecheck
+
+      - name: Run the smoke tests
+        run: npm test
+
+      # dist/ is gitignored. This build is what Pages actually serves, so the
+      # deployed bundle is always the one built from this commit's src/.
+      - name: Build the bundle
+        run: npm run build
+
+      - name: Generate the API docs
+        run: npm run docs
+
+      # Assemble exactly what the site needs. Uploading the checkout itself
+      # would ship node_modules, src/, and the tests along with it.
+      - name: Assemble the site
+        run: npm run site
+
+      - uses: actions/configure-pages@v5
+
+      - uses: actions/upload-pages-artifact@v3
+        with:
+          path: _site
+
+  deploy:
+    needs: build
+    runs-on: ubuntu-latest
+    environment:
+      name: github-pages
+      url: ${{ steps.deployment.outputs.page_url }}
+    steps:
+      - id: deployment
+        uses: actions/deploy-pages@v4

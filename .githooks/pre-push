@@ -1,0 +1,10 @@
+#!/usr/bin/env bash
+# Typecheck and test before every push, so a broken grader never reaches the
+# Pages workflow. The bundle itself is not checked here: dist/ is gitignored
+# and the workflow rebuilds it from src/ on every push.
+#
+# Install with: npm run hooks:install
+set -euo pipefail
+
+npm run typecheck
+npm test

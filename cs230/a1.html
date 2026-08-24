@@ -3,67 +3,22 @@
 <head>
 <meta charset="UTF-8" />
 <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-<title>Habit Cost — Autograder</title>
+<title>Habit Cost Autograder</title>
 <script src="https://cdn.jsdelivr.net/pyodide/v0.26.2/full/pyodide.js"></script>
-<script src="pyrunner.js"></script>
-<script src="checks.js"></script>
-<script src="rubric.js"></script>
-<script src="grader.js"></script>
-<link rel="stylesheet" href="a1.css" />
+<script src="../dist/autograder.js"></script>
 </head>
 <body>
-<div class="sheet">
-  <header>
-    <div class="title-block">
-      <h1>Habit Cost Autograder</h1>
-      <div class="sub">Assignment 1 &middot; program1.py &middot; 45 auto-graded (of 50 total)</div>
-    </div>
-    <div class="points-of">
-      <div class="big" id="headline">—</div>
-      <div class="lbl">/ 45 auto</div>
-    </div>
-  </header>
-
-  <div class="body">
-    <label class="drop" id="drop">
-      <strong>Drop program1.py here</strong>
-      <span>or click to choose a file &middot; runs entirely in your browser</span>
-      <div class="filename" id="filename"></div>
-      <input type="file" id="file" accept=".py" />
-    </label>
-
-    <div class="actions">
-      <button id="run" disabled>Grade submission</button>
-      <span class="status" id="status">Loading Python runtime…</span>
-    </div>
-
-    <div class="rubric" id="rubric"></div>
-
-    <div id="zero" style="display:none" class="zero-banner"></div>
-
-    <div class="summarybox" id="summarybox" style="display:none">
-      <div class="summarybox-head">
-        <span class="word">Summary</span>
-        <span class="copy-wrap">
-          <span class="status" id="copystatus"></span>
-          <button id="copy" class="ghost">Copy to clipboard</button>
-        </span>
-      </div>
-      <textarea id="summary" readonly spellcheck="false"></textarea>
-    </div>
-  </div>
-</div>
-
-<footer>bi3mer &middot; Runs Python via Pyodide. Nothing is uploaded.</footer>
-
 <script>
-// ---------- Expected outputs (computed independently of student code) ----------
-// Indentation is tab-based per spec ("Notice that the output is tabbed").
+// Assignment 1: habit-cost calculator. Everything below is assignment data;
+// the grading engine itself lives in ../dist/autograder.js (built from src/).
+
+// ---------- Expected output, computed independently of student code ----------
+// Indentation is tab-based per the spec ("Notice that the output is tabbed").
 const CASES = [
   {
     name: "Example 1 — Starbuck's Coffee",
-    stdin: ["Starbuck's Coffee", "100", "3.95"],
-    expected: [
+    stdin_lines: ["Starbuck's Coffee", "100", "3.95"],
+    expected_lines: [
       "Habit Costs for Starbuck's Coffee",
       "\tSpend per day:",
       "\t\tPre tax $3.95",
@@ -83,8 +38,8 @@ const CASES = [
   },
   {
     name: "Example 2 — Lunch Out",
-    stdin: ["Lunch Out", "50", "20"],
-    expected: [
+    stdin_lines: ["Lunch Out", "50", "20"],
+    expected_lines: [
       "Habit Costs for Lunch Out",
       "\tSpend per day:",
       "\t\tPre tax $10.00",
@@ -104,8 +59,8 @@ const CASES = [
   },
   {
     name: "Example 3 — Dog Food",
-    stdin: ["Dog Food", "3", "80"],
-    expected: [
+    stdin_lines: ["Dog Food", "3", "80"],
+    expected_lines: [
       "Habit Costs for Dog Food",
       "\tSpend per day:",
       "\t\tPre tax $2.40",
@@ -126,13 +81,13 @@ const CASES = [
 ];
 
 // ---------- Rubric ----------
-// Declarative criteria, graded by Rubric.grade() (see rubric.js) — plain
-// Checks-backed substring/output-diff/flake8 criteria, no custom code needed.
-function buildCriteria(results) {
+// Declarative criteria, scored by Autograder.rubric.grade(). Plain substring,
+// output-diff, and flake8 criteria cover this assignment; no custom code.
+function build_criteria(results) {
   return [
     {
       id: "input", name: "Input handling", points: 10,
-      desc: "Source calls input() with the exact prompt text from the examples.",
+      description: "Source calls input() with the exact prompt text from the examples.",
       type: "code",
       needles: [
         ['input("Habit name: ")', "input('Habit name: ')"],
@@ -143,56 +98,60 @@ function buildCriteria(results) {
     },
     {
       id: "output", name: "Correct output", points: 20,
-      desc: "20 points split evenly across all examples, prorated by the % of lines that match exactly.",
-      type: "output-diff", cases: CASES, anchor: "Habit Costs for",
+      description: "20 points split evenly across all examples, prorated by the % of lines that match exactly.",
+      type: "output-diff", cases: CASES, anchor_prefix: "Habit Costs for",
     },
     {
       id: "tabs", name: "Use of tabs", points: 2.5,
-      desc: "Output indentation uses \\t, matching the examples.",
+      description: "Output indentation uses \\t, matching the examples.",
       type: "output", needle: "\t",
     },
     {
-      // Regex, not a full parser: requires the f/rf prefix to sit right
-      // before the opening quote (a word boundary before it), so a
-      // .format() spec like ".2f" immediately before a closing quote
-      // doesn't count — that was a real false positive under a plain
-      // "f\"" substring check. A dict literal like d["f"] can still slip
-      // through (the "f" there is also preceded by a quote), but that
-      // shape doesn't come up in a habit-cost calculator, and this is a
-      // grading *preview* tool.
+      // A regex, not a parser: the f/rf prefix must sit right before the
+      // opening quote (word boundary ahead of it), so a .format() spec like
+      // ".2f" ending just before a closing quote does not count — that was a
+      // real false positive under a plain 'f"' substring check. A dict literal
+      // like d["f"] can still slip through, but that shape does not come up in
+      // a habit-cost calculator, and this is a grading preview tool.
       id: "fstrings", name: "Use of f-strings", points: 2.5,
-      desc: "Use of f-strings in code",
+      description: "Use of f-strings in code",
       type: "code-regex", regex: /\b(?:[rR]?[fF]|[fF][rR])["']/,
     },
     {
       id: "flake8", name: "flake8", points: 10,
-      desc: "−1 point per flake8 finding, down to a floor of 0.",
+      description: "−1 point per flake8 finding, down to a floor of 0.",
       type: "flake8", filename: "program1.py", partial: true,
     },
   ];
 }
 
+// Rubric lines this tool cannot check. Shown for completeness, excluded from
+// the automatic total, graded by the instructor.
 const MANUAL_ROWS = [
   {
     name: "Proper constants",
-    desc: "Fixed values (days/year, months/year, tax rate) as named constants, not magic numbers.",
+    description: "Fixed values (days/year, months/year, tax rate) as named constants, not magic numbers.",
     score: "manual / 5",
-    detail: "Not auto-graded — this tool doesn't check variable/constant naming. Reviewed by the instructor.",
+    detail: "Not auto-graded — this tool does not check variable or constant naming. Reviewed by the instructor.",
   },
   {
     name: "Naming / comments",
-    desc: "Variable names and comments quality.",
+    description: "Variable names and comment quality.",
     score: "manual / −5",
-    detail: "Not auto-graded — this tool doesn't check variable names or comments. Reviewed by the instructor.",
+    detail: "Not auto-graded — this tool does not check variable names or comments. Reviewed by the instructor.",
   },
 ];
 
-GraderApp.init({
+// The page markup (header, drop zone, rubric, summary box) is generated by
+// the library, and css/a1.css is picked up from beside the bundle.
+Autograder.grader_app.init({
   filename: "program1.py",
+  subtitle: "Assignment 1 · program1.py · 45 auto-graded (of 50 total)",
+  footer: "bi3mer · Runs Python via Pyodide. Nothing is uploaded.",
   cases: CASES,
-  buildCriteria,
-  manualRows: MANUAL_ROWS,
-  maxAuto: 45,
+  build_criteria,
+  manual_rows: MANUAL_ROWS,
+  max_auto_points: 45,
 });
 </script>
 </body>

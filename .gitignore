@@ -1,0 +1,10 @@
+node_modules/
+docs/api/
+
+# Built by `npm run build`, and rebuilt by .github/workflows/pages.yml on every
+# push. GitHub Pages serves the workflow's build, not the repository tree, so a
+# committed bundle would be dead weight that drifts from src/.
+dist/
+_site/
+
+.DS_Store
