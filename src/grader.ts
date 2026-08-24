@@ -9,14 +9,24 @@
 
 import { assert, assert_array, assert_range, assert_string } from "./assert.ts";
 import { escape_html } from "./html.ts";
-import { default_styles_href, ensure_stylesheet, render_skeleton } from "./page.ts";
+import {
+  default_styles_href,
+  ensure_stylesheet,
+  render_skeleton,
+} from "./page.ts";
 import * as py_runner from "./pyrunner.ts";
 import type { RunResult } from "./pyrunner.ts";
 import * as rubric from "./rubric.ts";
 import type { Criterion, GradeReport, GradedItem } from "./rubric.ts";
 import {
-  CRITERION_COUNT_MAX, FILENAME_CHARS_MAX, MANUAL_ROW_COUNT_MAX, NEEDLE_CHARS_MAX,
-  POINTS_MAX, SOURCE_BYTES_MAX, STDIN_LINE_COUNT_MAX, TEST_CASE_COUNT_MAX,
+  CRITERION_COUNT_MAX,
+  FILENAME_CHARS_MAX,
+  MANUAL_ROW_COUNT_MAX,
+  NEEDLE_CHARS_MAX,
+  POINTS_MAX,
+  SOURCE_BYTES_MAX,
+  STDIN_LINE_COUNT_MAX,
+  TEST_CASE_COUNT_MAX,
 } from "./constants.ts";
 
 export interface TestCase {
@@ -154,7 +164,8 @@ const ELEMENT_IDS_DEFAULT: ElementIds = {
   copy_status: "copystatus",
 };
 
-const SYNTAX_ZERO_MESSAGE = "Syntax error — score is zero per assignment policy.";
+const SYNTAX_ZERO_MESSAGE =
+  "Syntax error — score is zero per assignment policy.";
 
 /** Prefix `py_runner` puts on a compile failure. */
 const SYNTAX_PREFIX = "SYNTAX:";
@@ -170,14 +181,20 @@ function reason_for(error: unknown): string {
  * catch here than as a `null` dereference three callbacks later.
  */
 function require_element(id: string): HTMLElement {
-  assert(typeof id === "string" && id.length > 0, "require_element: id must be non-empty");
+  assert(
+    typeof id === "string" && id.length > 0,
+    "require_element: id must be non-empty",
+  );
   const element = document.getElementById(id);
   assert(element != null, `page is missing an element with id "${id}"`);
   return element;
 }
 
 function resolve_elements(ids: ElementIds): Elements {
-  assert(ids != null && typeof ids === "object", "resolve_elements: ids must be an object");
+  assert(
+    ids != null && typeof ids === "object",
+    "resolve_elements: ids must be an object",
+  );
   const elements: Elements = {
     status: require_element(ids.status),
     run: require_element(ids.run) as HTMLButtonElement,
@@ -200,26 +217,46 @@ function resolve_elements(ids: ElementIds): Elements {
 }
 
 function check_config(config: GraderConfig): void {
-  assert(config != null && typeof config === "object", "init: config must be an object");
+  assert(
+    config != null && typeof config === "object",
+    "init: config must be an object",
+  );
   assert_string(config.filename, "config.filename", FILENAME_CHARS_MAX);
   assert(config.filename.length > 0, "config.filename must not be empty");
-  const cases = assert_array<TestCase>(config.cases, "config.cases", TEST_CASE_COUNT_MAX);
+  const cases = assert_array<TestCase>(
+    config.cases,
+    "config.cases",
+    TEST_CASE_COUNT_MAX,
+  );
   assert(cases.length > 0, "config.cases must contain at least one case");
   for (let index = 0; index < cases.length; index++) {
     const test_case = cases[index];
-    assert_string(test_case.name, `config.cases[${index}].name`, NEEDLE_CHARS_MAX);
+    assert_string(
+      test_case.name,
+      `config.cases[${index}].name`,
+      NEEDLE_CHARS_MAX,
+    );
     assert_array(
       test_case.stdin_lines,
-      `config.cases[${index}].stdin_lines`, STDIN_LINE_COUNT_MAX,
+      `config.cases[${index}].stdin_lines`,
+      STDIN_LINE_COUNT_MAX,
     );
     assert_array(
       test_case.expected_lines,
-      `config.cases[${index}].expected_lines`, STDIN_LINE_COUNT_MAX,
+      `config.cases[${index}].expected_lines`,
+      STDIN_LINE_COUNT_MAX,
     );
   }
-  assert(typeof config.build_criteria === "function", "config.build_criteria must be a function");
+  assert(
+    typeof config.build_criteria === "function",
+    "config.build_criteria must be a function",
+  );
   assert_range(config.max_auto_points, "config.max_auto_points", 0, POINTS_MAX);
-  assert_array(config.manual_rows ?? [], "config.manual_rows", MANUAL_ROW_COUNT_MAX);
+  assert_array(
+    config.manual_rows ?? [],
+    "config.manual_rows",
+    MANUAL_ROW_COUNT_MAX,
+  );
 }
 
 function row_html(row: RubricRow): string {
@@ -228,7 +265,9 @@ function row_html(row: RubricRow): string {
     row.state === "pass" || row.state === "fail" || row.state === "pending",
     `row_html: unknown state ${row.state}`,
   );
-  const detail_html = row.detail ? `<div class="r-detail">${row.detail}</div>` : "";
+  const detail_html = row.detail
+    ? `<div class="r-detail">${row.detail}</div>`
+    : "";
   return `
       <div class="rubric-row">
         <div class="mark ${row.state}">${escape_html(row.mark)}</div>
@@ -243,11 +282,14 @@ function row_html(row: RubricRow): string {
 
 function row_for_item(item: GradedItem): RubricRow {
   assert(item != null, "row_for_item: item must not be null");
-  assert(item.earned <= item.points, `row_for_item: "${item.id}" earned more than its points`);
+  assert(
+    item.earned <= item.points,
+    `row_for_item: "${item.id}" earned more than its points`,
+  );
   const partial = !item.pass && item.earned > 0;
   return {
-    mark: item.pass ? "✓" : (partial ? "±" : "✗"),
-    state: item.pass ? "pass" : (partial ? "pending" : "fail"),
+    mark: item.pass ? "✓" : partial ? "±" : "✗",
+    state: item.pass ? "pass" : partial ? "pending" : "fail",
     name: item.name,
     description: item.description,
     score: `${item.earned} / ${item.points}`,
@@ -282,24 +324,33 @@ function summary_text(args: SummaryArgs, rows: RubricRow[]): string {
   assert(args != null, "summary_text: args must not be null");
   assert(Array.isArray(rows), "summary_text: rows must be an array");
   const lines = [`${args.filename} — Autograder Summary`];
-  lines.push(args.has_syntax_error
-    ? "Score: 0 (syntax error — see below)"
-    : `Score: ${args.total_points} / ${args.max_auto_points}`);
+  lines.push(
+    args.has_syntax_error
+      ? "Score: 0 (syntax error — see below)"
+      : `Score: ${args.total_points} / ${args.max_auto_points}`,
+  );
   lines.push("");
   for (let index = 0; index < rows.length; index++) {
     lines.push(`- ${rows[index].name}: ${rows[index].score}`);
   }
-  assert(lines.length === rows.length + 3, "summary_text: one line per row plus the header");
+  assert(
+    lines.length === rows.length + 3,
+    "summary_text: one line per row plus the header",
+  );
   return lines.join("\n");
 }
 
 function read_file_text(file: File): Promise<string> {
   assert(file != null, "read_file_text: file must not be null");
-  assert(typeof file.name === "string", "read_file_text: file must carry a name");
+  assert(
+    typeof file.name === "string",
+    "read_file_text: file must carry a name",
+  );
   return new Promise((resolve, reject) => {
     const reader = new FileReader();
     reader.onload = () => resolve(String(reader.result ?? ""));
-    reader.onerror = () => reject(reader.error ?? new Error(`could not read ${file.name}`));
+    reader.onerror = () =>
+      reject(reader.error ?? new Error(`could not read ${file.name}`));
     reader.readAsText(file);
   });
 }
@@ -312,14 +363,20 @@ function reset_output(session: GraderSession): void {
   elements.summary_box.style.display = "none";
   elements.summary.value = "";
   elements.headline.textContent = "—";
-  assert(elements.rubric.innerHTML === "", "reset_output: rubric must end empty");
+  assert(
+    elements.rubric.innerHTML === "",
+    "reset_output: rubric must end empty",
+  );
 }
 
 /**
  * A file the browser cannot read, or one too large to be a Python program,
  * leaves the previous submission in place and says why on the status line.
  */
-async function accept_file(session: GraderSession, file: File | null | undefined): Promise<void> {
+async function accept_file(
+  session: GraderSession,
+  file: File | null | undefined,
+): Promise<void> {
   assert(session != null, "accept_file: session must not be null");
   if (file == null) return;
   const { config, elements } = session;
@@ -339,8 +396,11 @@ async function accept_file(session: GraderSession, file: File | null | undefined
   session.source = text;
   const is_python = file.name.endsWith(".py");
   const submit_to = config.submit_to ?? "BrightSpace";
-  elements.filename.textContent = file.name +
-    (is_python ? "  ✓" : `  ⚠ Not a Python file. Submit a .py file on ${submit_to}`);
+  elements.filename.textContent =
+    file.name +
+    (is_python
+      ? "  ✓"
+      : `  ⚠ Not a Python file. Submit a .py file on ${submit_to}`);
   reset_output(session);
   elements.run.disabled = !py_runner.is_ready();
   elements.status.textContent = "File loaded. Ready to grade.";
@@ -354,9 +414,14 @@ async function score_submission(session: GraderSession): Promise<GradeReport> {
   const results: RunResult[] = [];
   for (let index = 0; index < config.cases.length; index++) {
     const stdin_lines = config.cases[index].stdin_lines;
-    results.push(await py_runner.run(source, stdin_lines, { filename: config.filename }));
+    results.push(
+      await py_runner.run(source, stdin_lines, { filename: config.filename }),
+    );
   }
-  assert(results.length === config.cases.length, "score_submission: one result per case");
+  assert(
+    results.length === config.cases.length,
+    "score_submission: one result per case",
+  );
 
   const criteria = config.build_criteria(results);
   assert_array(criteria, "build_criteria() result", CRITERION_COUNT_MAX);
@@ -374,9 +439,13 @@ async function grade_submission(session: GraderSession): Promise<void> {
   const { config, elements } = session;
   reset_output(session);
 
-  const probe = await py_runner.run(session.source, config.cases[0].stdin_lines, {
-    filename: config.filename,
-  });
+  const probe = await py_runner.run(
+    session.source,
+    config.cases[0].stdin_lines,
+    {
+      filename: config.filename,
+    },
+  );
   const has_syntax_error = probe.err.startsWith(SYNTAX_PREFIX);
   const rows: RubricRow[] = [row_for_syntax(probe)];
 
@@ -397,12 +466,15 @@ async function grade_submission(session: GraderSession): Promise<void> {
 
   elements.rubric.innerHTML = rows.map(row_html).join("");
   elements.headline.textContent = String(total_points);
-  elements.summary.value = summary_text({
-    filename: config.filename,
-    total_points,
-    max_auto_points: config.max_auto_points,
-    has_syntax_error,
-  }, rows);
+  elements.summary.value = summary_text(
+    {
+      filename: config.filename,
+      total_points,
+      max_auto_points: config.max_auto_points,
+      has_syntax_error,
+    },
+    rows,
+  );
   elements.summary_box.style.display = "block";
   elements.copy_status.textContent = "";
 }
@@ -460,7 +532,8 @@ function wire_buttons(session: GraderSession): void {
   const { elements } = session;
 
   elements.run.addEventListener("click", async () => {
-    if (session.source == null || !py_runner.is_ready() || session.grading) return;
+    if (session.source == null || !py_runner.is_ready() || session.grading)
+      return;
     session.grading = true;
     elements.run.disabled = true;
     elements.status.textContent = "Grading…";
@@ -485,7 +558,11 @@ async function boot(session: GraderSession): Promise<void> {
   assert(session != null, "boot: session must not be null");
   const { elements } = session;
   try {
-    await py_runner.init({ on_status: (message) => { elements.status.textContent = message; } });
+    await py_runner.init({
+      on_status: (message) => {
+        elements.status.textContent = message;
+      },
+    });
   } catch (error) {
     elements.status.textContent = `Python runtime failed to load: ${reason_for(error)}`;
     return;
@@ -497,10 +574,16 @@ function resolve_mount(mount: HTMLElement | string | undefined): HTMLElement {
   if (mount == null) return document.body;
   if (typeof mount === "string") {
     const found = document.querySelector(mount);
-    assert(found != null, `init: no element matches the mount selector "${mount}"`);
+    assert(
+      found != null,
+      `init: no element matches the mount selector "${mount}"`,
+    );
     return found as HTMLElement;
   }
-  assert(mount instanceof HTMLElement, "init: mount must be an element or a selector");
+  assert(
+    mount instanceof HTMLElement,
+    "init: mount must be an element or a selector",
+  );
   return mount;
 }
 
@@ -541,7 +624,10 @@ function ensure_page(config: GraderConfig, ids: ElementIds): boolean {
  */
 export function init(config: GraderConfig): void {
   check_config(config);
-  const ids: ElementIds = { ...ELEMENT_IDS_DEFAULT, ...(config.element_ids ?? {}) };
+  const ids: ElementIds = {
+    ...ELEMENT_IDS_DEFAULT,
+    ...(config.element_ids ?? {}),
+  };
   ensure_page(config, ids);
   const session: GraderSession = {
     config,
