@@ -54,7 +54,12 @@ export interface RubricRow {
 export type BuildCriteria = (results: RunResult[]) => Criterion[];
 
 export interface GraderConfig {
-  /** Expected submission filename, e.g. `"program1.py"`. */
+  /**
+   * Submission filename, e.g. `"program1.py"`. Names the file inside Pyodide
+   * (so tracebacks read `program1.py`), heads the copyable summary, and fills
+   * the default drop prompt. The upload itself is only checked for a `.py`
+   * extension, not for this exact name.
+   */
   filename: string;
   /**
    * Run in order. `cases[0].stdin_lines` also drives the syntax-error probe
@@ -83,7 +88,7 @@ export interface GraderConfig {
   /** `false` adds none. Defaults to `css/a1.css` beside the loaded bundle. */
   styles_href?: string | false;
   /**
-   * Where the student uploads the file, named in the wrong-filename warning.
+   * Where the student uploads the file, named in the non-Python-file warning.
    * Defaults to `"BrightSpace"`.
    */
   submit_to?: string;
@@ -332,10 +337,10 @@ async function accept_file(session: GraderSession, file: File | null | undefined
   }
 
   session.source = text;
-  const expected = file.name === config.filename;
+  const is_python = file.name.endsWith(".py");
   const submit_to = config.submit_to ?? "BrightSpace";
   elements.filename.textContent = file.name +
-    (expected ? "  ✓" : `  ⚠ Submit this file as ${config.filename} on ${submit_to}`);
+    (is_python ? "  ✓" : `  ⚠ Not a Python file. Submit a .py file on ${submit_to}`);
   reset_output(session);
   elements.run.disabled = !py_runner.is_ready();
   elements.status.textContent = "File loaded. Ready to grade.";
