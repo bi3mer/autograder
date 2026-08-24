@@ -1,0 +1,189 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1.0" />
+<title>Habit Cost — Autograder</title>
+<script src="https://cdn.jsdelivr.net/pyodide/v0.26.2/full/pyodide.js"></script>
+<script src="pyrunner.js"></script>
+<script src="checks.js"></script>
+<script src="rubric.js"></script>
+<script src="grader.js"></script>
+<link rel="stylesheet" href="a1.css" />
+</head>
+<body>
+<div class="sheet">
+  <header>
+    <div class="title-block">
+      <h1>Habit Cost Autograder</h1>
+      <div class="sub">Assignment 1 &middot; program1.py &middot; 45 auto-graded (of 50 total)</div>
+    </div>
+    <div class="points-of">
+      <div class="big" id="headline">—</div>
+      <div class="lbl">/ 45 auto</div>
+    </div>
+  </header>
+
+  <div class="body">
+    <label class="drop" id="drop">
+      <strong>Drop program1.py here</strong>
+      <span>or click to choose a file &middot; runs entirely in your browser</span>
+      <div class="filename" id="filename"></div>
+      <input type="file" id="file" accept=".py" />
+    </label>
+
+    <div class="actions">
+      <button id="run" disabled>Grade submission</button>
+      <button id="reset" class="ghost">Reset</button>
+      <span class="status" id="status">Loading Python runtime…</span>
+    </div>
+
+    <div class="rubric" id="rubric"></div>
+
+    <div id="zero" style="display:none" class="zero-banner"></div>
+
+    <div class="total" id="totalbox" style="display:none">
+      <span class="word">Auto-graded score (of 50 total — see notes below)</span>
+      <span class="num" id="totalnum">0 / 45</span>
+    </div>
+  </div>
+</div>
+
+<footer>bi3mer &middot; Runs Python via Pyodide. Nothing is uploaded.</footer>
+
+<script>
+// ---------- Expected outputs (computed independently of student code) ----------
+// Indentation is tab-based per spec ("Notice that the output is tabbed").
+const CASES = [
+  {
+    name: "Example 1 — Starbuck's Coffee",
+    stdin: ["Starbuck's Coffee", "100", "3.95"],
+    expected: [
+      "Habit Costs for Starbuck's Coffee",
+      "\tSpend per day:",
+      "\t\tPre tax $ 3.95",
+      "\t\tTax $ 0.28",
+      "\t\tTotal $ 4.23",
+      "",
+      "\tSpend per month:",
+      "\t\tPre tax $ 120.15",
+      "\t\tTax $ 8.41",
+      "\t\tTotal $ 128.56",
+      "",
+      "\tSpend per year:",
+      "\t\tPre tax $ 1441.75",
+      "\t\tTax $ 100.92",
+      "\t\tTotal $ 1542.67",
+    ],
+  },
+  {
+    name: "Example 2 — Lunch Out",
+    stdin: ["Lunch Out", "50", "20"],
+    expected: [
+      "Habit Costs for Lunch Out",
+      "\tSpend per day:",
+      "\t\tPre tax $ 10.00",
+      "\t\tTax $ 0.70",
+      "\t\tTotal $ 10.70",
+      "",
+      "\tSpend per month:",
+      "\t\tPre tax $ 304.17",
+      "\t\tTax $ 21.29",
+      "\t\tTotal $ 325.46",
+      "",
+      "\tSpend per year:",
+      "\t\tPre tax $ 3650.00",
+      "\t\tTax $ 255.50",
+      "\t\tTotal $ 3905.50",
+    ],
+  },
+  {
+    name: "Example 3 — Dog Food",
+    stdin: ["Dog Food", "3", "80"],
+    expected: [
+      "Habit Costs for Dog Food",
+      "\tSpend per day:",
+      "\t\tPre tax $ 2.40",
+      "\t\tTax $ 0.17",
+      "\t\tTotal $ 2.57",
+      "",
+      "\tSpend per month:",
+      "\t\tPre tax $ 73.00",
+      "\t\tTax $ 5.11",
+      "\t\tTotal $ 78.11",
+      "",
+      "\tSpend per year:",
+      "\t\tPre tax $ 876.00",
+      "\t\tTax $ 61.32",
+      "\t\tTotal $ 937.32",
+    ],
+  },
+];
+
+// ---------- Rubric ----------
+// Declarative criteria, graded by Rubric.grade() (see rubric.js) — plain
+// Checks-backed substring/output-diff/flake8 criteria, no custom code needed.
+function buildCriteria(results) {
+  return [
+    {
+      id: "input", name: "Input handling", points: 10,
+      desc: "Source calls input() with the exact prompt text from the examples.",
+      type: "code",
+      needles: [
+        ['input("Habit name: ")', "input('Habit name: ')"],
+        ['input("Percent of days per year (0-100): ")', "input('Percent of days per year (0-100): ')"],
+        ['input("Cost before tax: ")', "input('Cost before tax: ')"],
+      ],
+      mode: "all",
+    },
+    {
+      id: "output", name: "Correct output", points: 20,
+      desc: "20 points split evenly across all examples, prorated by the % of lines that match exactly.",
+      type: "output-diff", cases: CASES, anchor: "Habit Costs for",
+    },
+    {
+      id: "tabs", name: "Use of tabs", points: 2.5,
+      desc: "Output indentation uses \\t, matching the examples.",
+      type: "output", needle: "\t",
+    },
+    {
+      // Substring check, not a full parser: a rare false positive is possible
+      // (e.g. a dict literal like d["f"]), but this is a grading *preview*
+      // tool, and that shape doesn't come up in a habit-cost calculator.
+      id: "fstrings", name: "Use of f-strings", points: 2.5,
+      desc: "Use of f-strings in code",
+      type: "code", needles: ["f\"", "f'"], mode: "any",
+    },
+    {
+      id: "flake8", name: "flake8", points: 10,
+      desc: "Passes flake8 with no violations.",
+      type: "flake8", filename: "program1.py",
+    },
+  ];
+}
+
+const MANUAL_ROWS = [
+  {
+    name: "Proper constants",
+    desc: "Fixed values (days/year, months/year, tax rate) as named constants, not magic numbers.",
+    score: "manual / 5",
+    detail: "Not auto-graded — this tool doesn't check variable/constant naming. Reviewed by the instructor.",
+  },
+  {
+    name: "Naming / comments",
+    desc: "Variable names and comments quality.",
+    score: "manual / −5",
+    detail: "Not auto-graded — this tool doesn't check variable names or comments. Reviewed by the instructor.",
+  },
+];
+
+GraderApp.init({
+  filename: "program1.py",
+  cases: CASES,
+  buildCriteria,
+  manualRows: MANUAL_ROWS,
+  maxAuto: 45,
+});
+</script>
+</body>
+</html>
