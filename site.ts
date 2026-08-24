@@ -5,8 +5,6 @@
  * would ship `node_modules/`, `src/`, and the tests to the public site. This
  * copies the four directories a visitor actually loads, after `npm run build`
  * and `npm run docs` have produced two of them.
- *
- * Run with `npm run site`.
  */
 
 import { access, cp, rm, mkdir } from "node:fs/promises";
@@ -17,13 +15,8 @@ const DIRECTORIES = ["cs230", "css", "dist", "docs"];
 /** Files copied to the site root. `index.html` is what `/` serves. */
 const FILES = ["index.html"];
 
-/**
- * Copy one path into `_site/`, failing with a usable message when it is absent.
- *
- * @param {string} path Repository-relative path to copy.
- * @returns {Promise<void>} Resolves once the copy lands.
- */
-async function copy_into_site(path) {
+/** An absent path means a skipped build step, so the message says which. */
+async function copy_into_site(path: string): Promise<void> {
   try {
     await access(path);
   } catch {

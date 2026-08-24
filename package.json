@@ -3,6 +3,9 @@
   "version": "0.1.0",
   "description": "Browser-side Python autograder: Pyodide runner, substring checks, declarative rubric, and drop-a-file grading UI.",
   "type": "module",
+  "engines": {
+    "node": ">=24"
+  },
   "main": "dist/autograder.esm.js",
   "module": "dist/autograder.esm.js",
   "browser": "dist/autograder.min.js",
@@ -11,14 +14,15 @@
     "src"
   ],
   "scripts": {
-    "build": "node build.mjs",
-    "typecheck": "tsc -p jsconfig.json",
+    "build": "node build.ts",
+    "typecheck": "tsc -p tsconfig.json",
     "docs": "typedoc",
     "check": "npm run typecheck && npm run build",
     "serve": "python3 -m http.server 8000",
-    "test": "node test/smoke.mjs && node test/page.mjs",
+    "pretest": "npm run build",
+    "test": "node test/smoke.ts && node test/page.ts",
     "hooks:install": "git config core.hooksPath .githooks",
-    "site": "node site.mjs"
+    "site": "node site.ts"
   },
   "devDependencies": {
     "@types/jsdom": "^30.0.0",
@@ -26,7 +30,7 @@
     "esbuild": "^0.25.0",
     "jsdom": "^29.1.1",
     "typedoc": "^0.28.20",
-    "typescript": "^5.7.0"
+    "typescript": "^5.9.0"
   },
   "license": "MIT"
 }

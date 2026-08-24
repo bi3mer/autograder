@@ -24,21 +24,21 @@ jobs:
 
       - uses: actions/setup-node@v4
         with:
-          node-version: 22
+          node-version: 24
           cache: npm
 
       - run: npm ci
 
-      - name: Typecheck the JSDoc types
+      - name: Typecheck
         run: npm run typecheck
-
-      - name: Run the smoke tests
-        run: npm test
 
       # dist/ is gitignored. This build is what Pages actually serves, so the
       # deployed bundle is always the one built from this commit's src/.
       - name: Build the bundle
         run: npm run build
+
+      - name: Run the smoke tests
+        run: npm test
 
       - name: Generate the API docs
         run: npm run docs

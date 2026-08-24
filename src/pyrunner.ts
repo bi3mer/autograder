@@ -1,64 +1,75 @@
 /**
  * Pyodide-backed Python runner.
  *
- * Loads the CPython-in-WebAssembly runtime once, then feeds it a source
- * file plus canned stdin lines and hands back stdout, errors, and the
- * prompts that fired. Nothing here knows about any assignment's rubric:
- * pages call {@link run} and {@link lint} and score the result themselves.
+ * Loads the CPython-in-WebAssembly runtime once, then feeds it a source file
+ * plus canned stdin lines and hands back stdout, errors, and the prompts that
+ * fired. Nothing here knows about any assignment's rubric: pages call `run`
+ * and `lint` and score the result themselves.
  *
- * The page must load Pyodide before calling {@link init}, either by adding
+ * The page must load Pyodide before calling `init`, either by adding
  * `<script src=".../pyodide.js">` (which defines the global `loadPyodide`)
- * or by passing a `load_pyodide` function to {@link init}.
- *
- * @module py_runner
+ * or by passing a `load_pyodide` function to `init`.
  */
 
-import { assert, assert_array, assert_range, assert_string } from "./assert.js";
+import { assert, assert_array, assert_range, assert_string } from "./assert.ts";
 import {
   FILENAME_CHARS_MAX, LINE_COUNT_MAX, LINE_LENGTH_CHARS_DEFAULT, LINE_LENGTH_CHARS_MAX,
-  LINT_FINDING_COUNT_MAX, SOURCE_BYTES_MAX, STDIN_LINE_COUNT_MAX, SUBMISSION_FILENAME_DEFAULT,
-} from "./constants.js";
+  LINT_FILENAME, LINT_FINDING_COUNT_MAX, SOURCE_BYTES_MAX, STDIN_LINE_COUNT_MAX,
+  SUBMISSION_FILENAME_DEFAULT,
+} from "./constants.ts";
+
+export interface RunResult {
+  /** Captured stdout, including echoed input prompts. */
+  out: string;
+  /** `""`, `"SYNTAX:<message>"`, or `"RUNTIME:<traceback>"`. */
+  err: string;
+  /** Prompt strings passed to `input()`, in order. */
+  prompts: string[];
+}
+
+export interface InitResult {
+  ready: boolean;
+  flake8_ready: boolean;
+  /** Why flake8 is unavailable, `""` if it is. */
+  flake8_error: string;
+}
+
+export interface InitOptions {
+  /** Progress sink for the page's status line. */
+  on_status?: (message: string) => void;
+  /** Defaults to the global `loadPyodide` defined by Pyodide's own script tag. */
+  load_pyodide?: () => Promise<PyodideInterface>;
+}
 
 /**
- * @typedef {object} RunResult
- * @property {string} out Captured stdout, including echoed input prompts.
- * @property {string} err `""`, `"SYNTAX:<message>"`, or `"RUNTIME:<traceback>"`.
- * @property {string[]} prompts Prompt strings passed to `input()`, in order.
- */
-
-/**
- * @typedef {object} InitResult
- * @property {boolean} ready Whether the Python runtime loaded.
- * @property {boolean} flake8_ready Whether real flake8 is available.
- * @property {string} flake8_error Why flake8 is unavailable, `""` if it is.
- */
-
-/**
- * Runner lifecycle. `run` and `lint` assert against it rather than trusting
- * the caller to have awaited {@link init}: calling into a half-loaded
- * interpreter fails deep inside Pyodide with an unreadable message.
+ * The slice of Pyodide's API this module uses.
  *
- * @typedef {"idle" | "loading" | "ready" | "failed"} RunnerState
+ * Typed structurally rather than pulled from `pyodide`'s own package: the
+ * runtime arrives from a CDN script tag at page load, so there is no
+ * dependency to import types from, and only these three members are called.
  */
+export interface PyodideInterface {
+  runPythonAsync(code: string): Promise<unknown>;
+  loadPackage(names: string | string[]): Promise<unknown>;
+  pyimport(name: string): { install(package_name: string): Promise<unknown> };
+}
 
-/** @type {RunnerState} */
-let state = "idle";
+/**
+ * `run` and `lint` assert against this rather than trusting the caller to
+ * have awaited `init`: calling into a half-loaded interpreter fails deep
+ * inside Pyodide with an unreadable message.
+ */
+export type RunnerState = "idle" | "loading" | "ready" | "failed";
 
-/** @type {any} The loaded Pyodide interpreter, `null` until ready. */
-let pyodide = null;
-
-/** @type {boolean} Whether the flake8 wheel installed and warmed up. */
+let state: RunnerState = "idle";
+let pyodide: PyodideInterface | null = null;
 let flake8_ready = false;
-
-/** @type {string} Why flake8 is unavailable; `""` when it is available. */
 let flake8_error = "";
 
 /**
- * Python side of {@link lint}.
- *
  * Reads flake8's structured `manager.results` rather than its stdout
  * formatter: the formatter writes through `sys.stdout.buffer`, which does
- * not exist under the captured `io.StringIO` stream {@link run} installs.
+ * not exist under the captured `io.StringIO` stream `run` installs.
  */
 const LINT_BOOTSTRAP_PYTHON = `
 from flake8.api.legacy import get_style_guide
@@ -80,18 +91,15 @@ def _pyrunner_lint(src, filename, max_line_length):
 `;
 
 /**
- * Embed a JS string or array as a Python string literal holding JSON.
+ * Embed a JS value as a Python string literal holding JSON.
  *
  * `JSON.stringify` twice: the outer call produces the Python literal, whose
  * decoded value is itself JSON text that `json.loads()` parses back into the
  * real string or list. Encoding once and leaning on Python's own string
  * literal parsing looks equivalent, but mangles surrogate pairs and breaks
  * any consumer that then calls `json.loads` on the value.
- *
- * @param {string | string[]} value Value to hand to Python.
- * @returns {string} A Python source fragment: a quoted JSON string literal.
  */
-function embed(value) {
+function embed(value: string | string[]): string {
   assert(
     typeof value === "string" || Array.isArray(value),
     "embed: value must be a string or array",
@@ -104,13 +112,7 @@ function embed(value) {
   return encoded;
 }
 
-/**
- * Validate a filename the submission is compiled under.
- *
- * @param {unknown} filename Candidate filename.
- * @returns {string} The filename, bounded and free of path separators.
- */
-function check_filename(filename) {
+function check_filename(filename: unknown): string {
   const name = assert_string(filename, "filename", FILENAME_CHARS_MAX);
   assert(name.length > 0, "filename must not be empty");
   assert(!name.includes("/") && !name.includes("\\"), `filename must not contain a path: ${name}`);
@@ -118,16 +120,11 @@ function check_filename(filename) {
 }
 
 /**
- * Install flake8 into the running interpreter and warm up its API.
- *
- * Failure here is a degraded mode, not a crash: {@link regex_lint} covers
- * the common findings, so a student on a flaky network still gets graded.
- * The reason is kept in `flake8_error` so the page can say which engine ran.
- *
- * @param {(message: string) => void} on_status Progress sink.
- * @returns {Promise<void>} Resolves once flake8 is ready or has been ruled out.
+ * Failure here is a degraded mode, not a crash: `regex_lint` covers the
+ * common findings, so a student on a flaky network still gets graded. The
+ * reason is kept in `flake8_error` so the page can say which engine ran.
  */
-async function install_flake8(on_status) {
+async function install_flake8(on_status: (message: string) => void): Promise<void> {
   assert(typeof on_status === "function", "install_flake8: on_status must be a function");
   assert(pyodide != null, "install_flake8: interpreter must be loaded first");
   try {
@@ -147,23 +144,18 @@ async function install_flake8(on_status) {
 }
 
 /**
- * Load the Python runtime. Call once, and await it before {@link run}.
+ * Load the Python runtime. Call once, and await it before `run`.
  *
- * @param {object} [options] Initialization options.
- * @param {(message: string) => void} [options.on_status] Progress sink, called
- *   with human-readable stage names for the page's status line.
- * @param {() => Promise<any>} [options.load_pyodide] Loader override; defaults
- *   to the global `loadPyodide` defined by Pyodide's own script tag.
- * @returns {Promise<InitResult>} Which engines came up.
- * @throws {Error} If Pyodide itself fails to load; the page cannot grade
- *   without it, so this one is fatal rather than degraded.
+ * A Pyodide that fails to load throws: the page cannot grade without it, so
+ * this one is fatal rather than degraded.
  */
-export async function init(options = {}) {
+export async function init(options: InitOptions = {}): Promise<InitResult> {
   assert(options != null && typeof options === "object", "init: options must be an object");
   assert(state === "idle" || state === "failed", `init: already ${state}; call init() once`);
   const on_status = options.on_status ?? (() => {});
   assert(typeof on_status === "function", "init: on_status must be a function");
-  const load = options.load_pyodide ?? /** @type {any} */ (globalThis).loadPyodide;
+  const load = options.load_pyodide ??
+    (globalThis as { loadPyodide?: () => Promise<PyodideInterface> }).loadPyodide;
   assert(typeof load === "function", "init: loadPyodide is undefined; load pyodide.js first");
 
   state = "loading";
@@ -182,46 +174,28 @@ export async function init(options = {}) {
   return { ready: true, flake8_ready, flake8_error };
 }
 
-/**
- * Is the Python runtime loaded and usable?
- *
- * @returns {boolean} True once {@link init} has resolved successfully.
- */
-export function is_ready() {
+export function is_ready(): boolean {
   return state === "ready" && pyodide != null;
 }
 
-/**
- * Is real flake8 available, as opposed to the regex fallback?
- *
- * @returns {boolean} True when {@link lint} may be called.
- */
-export function is_flake8_ready() {
+/** False means `lint` will throw and `regex_lint` is the only option. */
+export function is_flake8_ready(): boolean {
   return flake8_ready;
 }
 
-/**
- * Why flake8 is unavailable.
- *
- * @returns {string} The failure reason, or `""` when flake8 is available.
- */
-export function flake8_failure_reason() {
+/** `""` when flake8 is available. */
+export function flake8_failure_reason(): string {
   return flake8_error;
 }
 
 /**
  * Build the Python driver that runs one submission under fake stdin.
  *
- * `input()` is replaced so it writes `prompt + typed value + "\n"` to
- * stdout, which is what a real terminal session looks like. That lets the
- * caller diff a whole transcript and separately inspect which prompts fired.
- *
- * @param {string} code Submission source.
- * @param {string[]} stdin_lines Values successive `input()` calls receive.
- * @param {string} filename Name the source is compiled under.
- * @returns {string} Python source producing a JSON {@link RunResult}.
+ * `input()` is replaced so it writes `prompt + typed value + "\n"` to stdout,
+ * which is what a real terminal session looks like. That lets the caller diff
+ * a whole transcript and separately inspect which prompts fired.
  */
-function build_run_python(code, stdin_lines, filename) {
+function build_run_python(code: string, stdin_lines: string[], filename: string): string {
   assert(typeof code === "string", "build_run_python: code must be a string");
   assert(Array.isArray(stdin_lines), "build_run_python: stdin_lines must be an array");
   return `
@@ -260,15 +234,12 @@ json.dumps({"out": _out.getvalue(), "err": _err, "prompts": _prompts})
  * A student program that raises is not an error here: the traceback comes
  * back in `err` and the rubric decides what it costs. Only a broken runner
  * throws.
- *
- * @param {string} code Submission source.
- * @param {string[]} stdin_lines Values fed to successive `input()` calls.
- * @param {object} [options] Run options.
- * @param {string} [options.filename="submission.py"] Name shown in tracebacks.
- * @returns {Promise<RunResult>} Captured stdout, error text, and prompts.
- * @throws {Error} If called before {@link init} resolved.
  */
-export async function run(code, stdin_lines, options = {}) {
+export async function run(
+  code: string,
+  stdin_lines: string[],
+  options: { filename?: string } = {},
+): Promise<RunResult> {
   assert(is_ready(), "run: called before init() resolved");
   assert_string(code, "run: code", SOURCE_BYTES_MAX);
   assert_array(stdin_lines, "run: stdin_lines", STDIN_LINE_COUNT_MAX);
@@ -278,9 +249,10 @@ export async function run(code, stdin_lines, options = {}) {
   }
   const filename = check_filename(options.filename ?? SUBMISSION_FILENAME_DEFAULT);
 
+  assert(pyodide != null, "run: interpreter must be loaded");
   const encoded = await pyodide.runPythonAsync(build_run_python(code, stdin_lines, filename));
   assert(typeof encoded === "string", "run: driver must return a JSON string");
-  const result = /** @type {RunResult} */ (JSON.parse(encoded));
+  const result = JSON.parse(encoded) as RunResult;
 
   assert(typeof result.out === "string", "run: out must be a string");
   assert(typeof result.err === "string", "run: err must be a string");
@@ -296,27 +268,35 @@ export async function run(code, stdin_lines, options = {}) {
   return result;
 }
 
+interface LintFinding {
+  code: string;
+  line: number;
+  col: number;
+  text: string;
+}
+
 /**
- * Lint a submission with real flake8.
+ * Lint a submission with real flake8, returning `"L<line>:<col> <code> <text>"`
+ * findings. Throws when flake8 is unavailable; call `regex_lint` instead.
  *
- * @param {string} code Submission source.
- * @param {object} [options] Lint options.
- * @param {string} [options.filename="submission.py"] Name flake8 reports on.
- * @param {number} [options.max_line_length_chars=99] Line-length ceiling.
- * @returns {Promise<string[]>} Findings as `"L<line>:<col> <code> <text>"`.
- * @throws {Error} If flake8 is unavailable; call {@link regex_lint} instead.
+ * The path flake8 lints is `LINT_FILENAME`, not a caller's choice: it is a
+ * scratch file in Pyodide's filesystem that no finding ever names.
  */
-export async function lint(code, options = {}) {
+export async function lint(
+  code: string,
+  options: { max_line_length_chars?: number } = {},
+): Promise<string[]> {
   assert(is_ready(), "lint: called before init() resolved");
   assert(flake8_ready, `lint: flake8 unavailable (${flake8_error || "not installed"})`);
   assert_string(code, "lint: code", SOURCE_BYTES_MAX);
   assert(options != null && typeof options === "object", "lint: options must be an object");
-  const filename = check_filename(options.filename ?? SUBMISSION_FILENAME_DEFAULT);
+  const filename = check_filename(LINT_FILENAME);
   const max_line_length_chars = assert_range(
     options.max_line_length_chars ?? LINE_LENGTH_CHARS_DEFAULT,
     "lint: max_line_length_chars", 1, LINE_LENGTH_CHARS_MAX,
   );
 
+  assert(pyodide != null, "lint: interpreter must be loaded");
   const encoded = await pyodide.runPythonAsync(`
 import json
 _findings = _pyrunner_lint(
@@ -325,12 +305,12 @@ _findings = _pyrunner_lint(
 json.dumps(_findings)
 `);
   assert(typeof encoded === "string", "lint: bootstrap must return a JSON string");
-  const findings = assert_array(JSON.parse(encoded), "lint: findings", LINT_FINDING_COUNT_MAX);
+  const findings = assert_array<LintFinding>(
+    JSON.parse(encoded), "lint: findings", LINT_FINDING_COUNT_MAX,
+  );
 
-  /** @type {string[]} */
-  const formatted = [];
+  const formatted: string[] = [];
   for (let index = 0; index < findings.length; index++) {
-    /** @type {{ code: string, line: number, col: number, text: string }} */
     const finding = findings[index];
     assert(typeof finding.code === "string", `lint: findings[${index}].code must be a string`);
     formatted.push(`L${finding.line}:${finding.col} ${finding.code} ${finding.text}`);
@@ -340,19 +320,15 @@ json.dumps(_findings)
 }
 
 /**
- * Regex fallback for the findings flake8 would have caught, used only when
- * flake8 failed to install.
- *
- * It covers the four findings that dominate first-year submissions: tabs,
- * trailing whitespace, long lines, and bare `except:`. It is deliberately
- * not a reimplementation of pycodestyle.
- *
- * @param {string} code Submission source.
- * @param {object} [options] Lint options.
- * @param {number} [options.max_line_length_chars=99] Line-length ceiling.
- * @returns {string[]} Findings, in the same shape {@link lint} returns.
+ * Fallback used only when flake8 failed to install, in the same shape `lint`
+ * returns. It covers the four findings that dominate first-year submissions:
+ * tabs, trailing whitespace, long lines, and bare `except:`. It is
+ * deliberately not a reimplementation of pycodestyle.
  */
-export function regex_lint(code, options = {}) {
+export function regex_lint(
+  code: string,
+  options: { max_line_length_chars?: number } = {},
+): string[] {
   assert_string(code, "regex_lint: code", SOURCE_BYTES_MAX);
   assert(options != null && typeof options === "object", "regex_lint: options must be an object");
   const max_line_length_chars = assert_range(
@@ -362,8 +338,7 @@ export function regex_lint(code, options = {}) {
 
   const lines = code.replace(/\r/g, "").split("\n");
   assert(lines.length <= LINE_COUNT_MAX, `regex_lint: code exceeds ${LINE_COUNT_MAX} lines`);
-  /** @type {string[]} */
-  const findings = [];
+  const findings: string[] = [];
   for (let index = 0; index < lines.length; index++) {
     const line = lines[index];
     const number = index + 1;

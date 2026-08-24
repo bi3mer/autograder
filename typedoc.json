@@ -1,7 +1,7 @@
 {
   "$schema": "https://typedoc.org/schema.json",
-  "entryPoints": ["src/index.js"],
-  "tsconfig": "jsconfig.json",
+  "entryPoints": ["src/index.ts"],
+  "tsconfig": "tsconfig.json",
   "out": "docs/api",
   "readme": "README.md",
   "name": "autograder",

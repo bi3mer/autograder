@@ -1,26 +1,25 @@
 /**
- * @file Bundle `src/` into `dist/`.
+ * Bundle `src/` into `dist/`.
  *
  * Three outputs, all self-contained: a readable IIFE that defines the global
  * `Autograder`, a minified IIFE for the deployed page, and an ES module for
- * tooling. Assertions stay live in every one of them (see `src/assert.js`).
- *
- * Run with `npm run build`.
+ * tooling. Assertions stay live in every one of them (see `src/assert.ts`).
  */
 
 import { build } from "esbuild";
+import type { BuildOptions } from "esbuild";
 import { mkdir, readFile, writeFile } from "node:fs/promises";
 
-const package_json = JSON.parse(await readFile(new URL("./package.json", import.meta.url), "utf8"));
+const package_json = JSON.parse(
+  await readFile(new URL("./package.json", import.meta.url), "utf8"),
+) as { version: string };
 
 // Version only, no build date: a date would make every rebuild produce a diff
 // even when src/ has not changed, which defeats any "is dist/ stale?" check.
-/** Banner stamped on every output. */
 const banner = `/*! autograder v${package_json.version} */`;
 
-/** @type {import("esbuild").BuildOptions} */
-const shared = {
-  entryPoints: ["src/index.js"],
+const shared: BuildOptions = {
+  entryPoints: ["src/index.ts"],
   bundle: true,
   target: ["es2021"],
   sourcemap: true,
@@ -30,7 +29,9 @@ const shared = {
 
 await mkdir("dist", { recursive: true });
 
-await build({ ...shared, format: "iife", globalName: "Autograder", outfile: "dist/autograder.js" });
+await build({
+  ...shared, format: "iife", globalName: "Autograder", outfile: "dist/autograder.js",
+});
 await build({
   ...shared, format: "iife", globalName: "Autograder",
   outfile: "dist/autograder.min.js", minify: true,

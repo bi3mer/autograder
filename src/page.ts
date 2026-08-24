@@ -1,40 +1,41 @@
 /**
- * The page skeleton, built in JavaScript.
+ * The page skeleton, built in code rather than markup.
  *
  * Every assignment page used to carry the same forty lines of markup: a
  * header, a drop zone, a button, an empty rubric container, and a summary
  * box. That markup is boilerplate, and boilerplate copied per assignment
- * drifts per assignment. {@link render_skeleton} builds it instead, so an
+ * drifts per assignment. `render_skeleton` builds it instead, so an
  * assignment page is a title, a stylesheet, and its data.
  *
  * A page that already provides the markup keeps working: `grader_app.init`
  * only renders when the elements are absent.
- *
- * @module page
  */
 
-import { assert, assert_string } from "./assert.js";
-import { NEEDLE_CHARS_MAX } from "./constants.js";
-import { escape_html } from "./html.js";
+import { assert, assert_string } from "./assert.ts";
+import { NEEDLE_CHARS_MAX } from "./constants.ts";
+import type { ElementIds } from "./grader.ts";
+import { escape_html } from "./html.ts";
 
-/**
- * @typedef {import("./grader.js").ElementIds} ElementIds
- */
+export type { ElementIds };
 
-/**
- * @typedef {object} SkeletonOptions
- * @property {ElementIds} ids Element ids to stamp onto the generated markup.
- * @property {string} title Heading text.
- * @property {string} [subtitle] Sub-heading under the title.
- * @property {string} [headline_label] Caption under the score, e.g. `"/ 45 auto"`.
- * @property {string} [drop_prompt] Bold line in the drop zone.
- * @property {string} [drop_hint] Small line under the drop prompt.
- * @property {string} [accept=".py"] `accept` attribute for the file input.
- * @property {string} [footer] Footer text; omitted when absent.
- * @property {HTMLElement} mount Element the skeleton renders into.
- */
+export interface SkeletonOptions {
+  ids: ElementIds;
+  /** Heading text. */
+  title: string;
+  subtitle?: string;
+  /** Caption under the score, e.g. `"/ 45 auto"`. */
+  headline_label?: string;
+  /** Bold line in the drop zone. */
+  drop_prompt?: string;
+  /** Small line under the drop prompt. */
+  drop_hint?: string;
+  /** `accept` attribute for the file input. */
+  accept?: string;
+  /** Omitted when absent. */
+  footer?: string;
+  mount: HTMLElement;
+}
 
-/** Small line under the drop prompt, when the caller supplies none. */
 const DROP_HINT_DEFAULT = "or click to choose a file · runs entirely in your browser";
 
 /**
@@ -46,36 +47,27 @@ const DROP_HINT_DEFAULT = "or click to choose a file · runs entirely in your br
  * the stylesheet link. Module builds report `null` here, so an ES module
  * consumer passes `styles_href` explicitly or links the stylesheet itself.
  */
-const BUNDLE_SRC = typeof document !== "undefined" && document.currentScript instanceof HTMLScriptElement
+const BUNDLE_SRC = typeof document !== "undefined" &&
+  document.currentScript instanceof HTMLScriptElement
   ? document.currentScript.src
   : "";
 
-/**
- * Resolve the stylesheet that ships beside the bundle.
- *
- * @returns {string} Absolute URL of `css/a1.css`, or `""` when the bundle's
- *   own location is unknown.
- */
-export function default_styles_href() {
+/** `""` when the bundle's own location is unknown. */
+export function default_styles_href(): string {
   if (BUNDLE_SRC === "") return "";
   const href = new URL("../css/a1.css", BUNDLE_SRC).href;
   assert(href.endsWith("a1.css"), "default_styles_href: must resolve to the stylesheet");
   return href;
 }
 
-/**
- * Add a stylesheet link, unless the page already loads that same file.
- *
- * @param {string} href Stylesheet URL; `""` is a no-op.
- * @returns {boolean} True when a link was added.
- */
-export function ensure_stylesheet(href) {
+/** Adds nothing when the page already loads that same file, or when `href` is `""`. */
+export function ensure_stylesheet(href: string): boolean {
   assert(typeof href === "string", "ensure_stylesheet: href must be a string");
   if (href === "") return false;
   const absolute = new URL(href, document.baseURI).href;
   const links = document.querySelectorAll('link[rel="stylesheet"]');
   for (let index = 0; index < links.length; index++) {
-    const link = /** @type {HTMLLinkElement} */ (links[index]);
+    const link = links[index] as HTMLLinkElement;
     if (link.href === absolute) return false;
   }
   const link = document.createElement("link");
@@ -87,13 +79,7 @@ export function ensure_stylesheet(href) {
   return true;
 }
 
-/**
- * Build the header: title, subtitle, and the running score.
- *
- * @param {SkeletonOptions} options Skeleton options.
- * @returns {string} Header markup.
- */
-function header_html(options) {
+function header_html(options: SkeletonOptions): string {
   assert_string(options.title, "page: title", NEEDLE_CHARS_MAX);
   assert(options.title.length > 0, "page: title must not be empty");
   const subtitle = options.subtitle
@@ -113,13 +99,7 @@ function header_html(options) {
     </header>`;
 }
 
-/**
- * Build the body: drop zone, grade button, rubric, and summary box.
- *
- * @param {SkeletonOptions} options Skeleton options.
- * @returns {string} Body markup.
- */
-function body_html(options) {
+function body_html(options: SkeletonOptions): string {
   const { ids } = options;
   const prompt = options.drop_prompt ?? "Drop your submission here";
   const hint = options.drop_hint ?? DROP_HINT_DEFAULT;
@@ -155,16 +135,14 @@ function body_html(options) {
 }
 
 /**
- * Render the page skeleton into `options.mount`.
- *
  * The markup is appended rather than assigned, so a page may put its own
  * content (a course banner, a link back to the syllabus) around the grader.
- *
- * @param {SkeletonOptions} options Skeleton options.
- * @returns {void}
  */
-export function render_skeleton(options) {
-  assert(options != null && typeof options === "object", "render_skeleton: options must be an object");
+export function render_skeleton(options: SkeletonOptions): void {
+  assert(
+    options != null && typeof options === "object",
+    "render_skeleton: options must be an object",
+  );
   assert(options.mount != null, "render_skeleton: mount must be an element");
   assert(options.ids != null, "render_skeleton: ids must be provided");
 

@@ -1,30 +1,23 @@
 /**
- * @file Smoke tests for the parts that run without a browser.
+ * Smoke tests for the parts that run without a browser.
  *
  * Pyodide needs a browser, so `py_runner.run` is out of scope here; what is
  * in scope is everything that decides a student's score: substring matching,
  * line diffing, partial credit, clamping, and the assertions that guard them.
- *
- * Run with `npm test`.
  */
 
 import assert_node from "node:assert/strict";
-import { AssertionError } from "../src/assert.js";
-import * as checks from "../src/checks.js";
-import { escape_html } from "../src/html.js";
-import * as py_runner from "../src/pyrunner.js";
-import * as rubric from "../src/rubric.js";
+import { AssertionError } from "../src/assert.ts";
+import * as checks from "../src/checks.ts";
+import { escape_html } from "../src/html.ts";
+import * as py_runner from "../src/pyrunner.ts";
+import * as rubric from "../src/rubric.ts";
+import type { Criterion } from "../src/rubric.ts";
 
 let passed = 0;
 
-/**
- * Run one named test, reporting the first failure and stopping.
- *
- * @param {string} name What the test asserts.
- * @param {() => void | Promise<void>} body Test body.
- * @returns {Promise<void>} Resolves when the test passes.
- */
-async function test(name, body) {
+/** Reports the first failure and stops: no point scoring a broken engine. */
+async function test(name: string, body: () => void | Promise<void>): Promise<void> {
   await body();
   passed++;
   console.log(`  ok  ${name}`);
@@ -90,8 +83,9 @@ await test("output-diff prorates credit by matching lines", async () => {
 });
 
 await test("code-regex resets lastIndex between submissions", async () => {
-  /** @type {import("../src/rubric.js").Criterion} */
-  const criterion = { id: "f", name: "F", points: 1, type: "code-regex", regex: /f["']/g };
+  const criterion: Criterion = {
+    id: "f", name: "F", points: 1, type: "code-regex", regex: /f["']/g,
+  };
   const first = await rubric.grade([criterion], { source: 'f"x"', results: [] });
   const second = await rubric.grade([criterion], { source: 'f"x"', results: [] });
   assert_node.equal(first.items[0].earned, 1);
@@ -142,7 +136,7 @@ await test("run before init trips an assertion", async () => {
 
 await test("a regex from another realm still counts as a regex", async () => {
   const vm = await import("node:vm");
-  const foreign = vm.runInNewContext('/f["\']/');
+  const foreign = vm.runInNewContext('/f["\']/') as RegExp;
   assert_node.equal(foreign instanceof RegExp, false, "precondition: foreign realm");
   const report = await rubric.grade(
     [{ id: "f", name: "F", points: 1, type: "code-regex", regex: foreign }],
@@ -156,7 +150,7 @@ await test("the built bundle defines the Autograder global", async () => {
   const vm = await import("node:vm");
   const bundle_path = new URL("../dist/autograder.js", import.meta.url);
   const source = await readFile(bundle_path, "utf8");
-  const sandbox = /** @type {any} */ ({});
+  const sandbox: Record<string, any> = {};
   vm.createContext(sandbox);
   vm.runInContext(source, sandbox);
   assert_node.deepEqual(

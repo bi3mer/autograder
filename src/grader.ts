@@ -2,130 +2,139 @@
  * Page glue: file drop, grading run, rubric rendering.
  *
  * This is the only module that touches the DOM. An assignment page supplies
- * its test cases and rubric through {@link init} and reuses the shared page
+ * its test cases and rubric through `init` and reuses the shared page
  * skeleton (the element ids in `ELEMENT_IDS_DEFAULT`) and `css/a1.css`.
  * Nothing here knows about any specific assignment.
- *
- * @module grader_app
  */
 
-import { assert, assert_array, assert_range, assert_string } from "./assert.js";
-import { escape_html } from "./html.js";
-import { default_styles_href, ensure_stylesheet, render_skeleton } from "./page.js";
-import * as py_runner from "./pyrunner.js";
-import * as rubric from "./rubric.js";
+import { assert, assert_array, assert_range, assert_string } from "./assert.ts";
+import { escape_html } from "./html.ts";
+import { default_styles_href, ensure_stylesheet, render_skeleton } from "./page.ts";
+import * as py_runner from "./pyrunner.ts";
+import type { RunResult } from "./pyrunner.ts";
+import * as rubric from "./rubric.ts";
+import type { Criterion, GradeReport, GradedItem } from "./rubric.ts";
 import {
   CRITERION_COUNT_MAX, FILENAME_CHARS_MAX, MANUAL_ROW_COUNT_MAX, NEEDLE_CHARS_MAX,
   POINTS_MAX, SOURCE_BYTES_MAX, STDIN_LINE_COUNT_MAX, TEST_CASE_COUNT_MAX,
-} from "./constants.js";
+} from "./constants.ts";
 
-/**
- * @typedef {object} TestCase
- * @property {string} name Case label shown to the student.
- * @property {string[]} stdin_lines Values fed to successive `input()` calls.
- * @property {string[]} expected_lines Required output, one entry per line.
- */
+export interface TestCase {
+  name: string;
+  /** Values fed to successive `input()` calls. */
+  stdin_lines: string[];
+  /** Required output, one entry per line. */
+  expected_lines: string[];
+}
 
 /**
  * A rubric line the tool cannot check, shown for completeness and excluded
  * from the automatic total (variable naming, comment quality, and the like).
- *
- * @typedef {object} ManualRow
- * @property {string} name Row title.
- * @property {string} description Sub-line under the title.
- * @property {string} score Text shown in the score column, e.g. `"manual / 5"`.
- * @property {string} [detail] Explanation shown under the description.
  */
+export interface ManualRow {
+  name: string;
+  description: string;
+  /** Text shown in the score column, e.g. `"manual / 5"`. */
+  score: string;
+  detail?: string;
+}
 
-/**
- * @typedef {object} RubricRow
- * @property {string} mark Glyph in the left column: `✓`, `±`, `✗`, or `—`.
- * @property {"pass" | "fail" | "pending"} state CSS state class for the mark.
- * @property {string} name Row title.
- * @property {string} description Sub-line under the title.
- * @property {string} score Text shown in the score column.
- * @property {string} [detail] Explanation, already HTML-escaped where needed.
- */
+export interface RubricRow {
+  /** Glyph in the left column: `✓`, `±`, `✗`, or `—`. */
+  mark: string;
+  /** CSS state class for the mark. */
+  state: "pass" | "fail" | "pending";
+  name: string;
+  description: string;
+  score: string;
+  /** Already HTML-escaped where needed. */
+  detail?: string;
+}
 
-/**
- * @callback BuildCriteria
- * @param {import("./pyrunner.js").RunResult[]} results One run per test case.
- * @returns {import("./rubric.js").Criterion[]} The rubric, in display order.
- */
+export type BuildCriteria = (results: RunResult[]) => Criterion[];
 
-/**
- * @typedef {object} GraderConfig
- * @property {string} filename Expected submission filename, e.g. `"program1.py"`.
- * @property {TestCase[]} cases Test cases, run in order. `cases[0].stdin_lines`
- *   also drives the syntax-error probe that gates the whole run.
- * @property {BuildCriteria} build_criteria Builds the rubric from the results.
- * @property {number} max_auto_points Denominator shown beside the total.
- * @property {ManualRow[]} [manual_rows] Instructor-graded rows, not totalled.
- * @property {Partial<ElementIds>} [element_ids] Element id overrides.
- * @property {string} [title] Page heading; defaults to `document.title`.
- * @property {string} [subtitle] Line under the heading, e.g. the rubric total.
- * @property {string} [headline_label] Caption under the score; defaults to
- *   `"/ <max_auto_points> auto"`.
- * @property {string} [drop_prompt] Bold line in the drop zone; defaults to
- *   `"Drop <filename> here"`.
- * @property {string} [drop_hint] Small line under the drop prompt.
- * @property {string} [accept=".py"] `accept` attribute for the file input.
- * @property {string} [footer] Footer text; omitted when absent.
- * @property {HTMLElement | string} [mount] Element (or selector) the skeleton
- *   renders into; defaults to `document.body`.
- * @property {string | false} [styles_href] Stylesheet to add, `false` to add
- *   none. Defaults to `css/a1.css` beside the loaded bundle.
- * @property {string} [submit_to="BrightSpace"] Where the student uploads the
- *   file, named in the wrong-filename warning.
- */
+export interface GraderConfig {
+  /** Expected submission filename, e.g. `"program1.py"`. */
+  filename: string;
+  /**
+   * Run in order. `cases[0].stdin_lines` also drives the syntax-error probe
+   * that gates the whole run.
+   */
+  cases: TestCase[];
+  build_criteria: BuildCriteria;
+  /** Denominator shown beside the total. */
+  max_auto_points: number;
+  /** Instructor-graded rows, not totalled. */
+  manual_rows?: ManualRow[];
+  element_ids?: Partial<ElementIds>;
+  /** Defaults to `document.title`. */
+  title?: string;
+  /** Line under the heading, e.g. the rubric total. */
+  subtitle?: string;
+  /** Defaults to `"/ <max_auto_points> auto"`. */
+  headline_label?: string;
+  /** Defaults to `"Drop <filename> here"`. */
+  drop_prompt?: string;
+  drop_hint?: string;
+  accept?: string;
+  footer?: string;
+  /** Element or selector; defaults to `document.body`. */
+  mount?: HTMLElement | string;
+  /** `false` adds none. Defaults to `css/a1.css` beside the loaded bundle. */
+  styles_href?: string | false;
+  /**
+   * Where the student uploads the file, named in the wrong-filename warning.
+   * Defaults to `"BrightSpace"`.
+   */
+  submit_to?: string;
+}
 
-/**
- * @typedef {object} ElementIds
- * @property {string} status Status line beside the grade button.
- * @property {string} run Grade button.
- * @property {string} drop Drop zone label.
- * @property {string} file Hidden file input.
- * @property {string} filename Chosen filename readout.
- * @property {string} rubric Container the rubric rows render into.
- * @property {string} zero Banner shown when a syntax error zeroes the score.
- * @property {string} headline Large score readout in the header.
- * @property {string} summary_box Wrapper around the summary textarea.
- * @property {string} summary Textarea holding the copy-paste summary.
- * @property {string} copy Copy-to-clipboard button.
- * @property {string} copy_status Status line beside the copy button.
- */
+export interface ElementIds {
+  status: string;
+  run: string;
+  drop: string;
+  file: string;
+  filename: string;
+  rubric: string;
+  zero: string;
+  headline: string;
+  summary_box: string;
+  summary: string;
+  copy: string;
+  copy_status: string;
+}
 
-/**
- * @typedef {object} Elements
- * @property {HTMLElement} status Status line beside the grade button.
- * @property {HTMLButtonElement} run Grade button.
- * @property {HTMLElement} drop Drop zone label.
- * @property {HTMLInputElement} file Hidden file input.
- * @property {HTMLElement} filename Chosen filename readout.
- * @property {HTMLElement} rubric Container the rubric rows render into.
- * @property {HTMLElement} zero Banner shown when a syntax error zeroes the score.
- * @property {HTMLElement} headline Large score readout in the header.
- * @property {HTMLElement} summary_box Wrapper around the summary textarea.
- * @property {HTMLTextAreaElement} summary Textarea holding the summary.
- * @property {HTMLElement} copy Copy-to-clipboard button.
- * @property {HTMLElement} copy_status Status line beside the copy button.
- */
+export interface Elements {
+  status: HTMLElement;
+  run: HTMLButtonElement;
+  drop: HTMLElement;
+  file: HTMLInputElement;
+  filename: HTMLElement;
+  rubric: HTMLElement;
+  zero: HTMLElement;
+  headline: HTMLElement;
+  summary_box: HTMLElement;
+  summary: HTMLTextAreaElement;
+  copy: HTMLElement;
+  copy_status: HTMLElement;
+}
 
 /**
  * Everything one wired-up page owns. Passing this explicitly, rather than
  * closing over a pile of `let`s, keeps every handler a top-level function
  * small enough to read in one screen.
- *
- * @typedef {object} GraderSession
- * @property {GraderConfig} config Assignment configuration.
- * @property {Elements} elements Resolved page elements.
- * @property {ManualRow[]} manual_rows Instructor-graded rows.
- * @property {string | null} source Loaded submission, `null` until one is chosen.
- * @property {boolean} grading True while a run is in flight, to reject re-entry.
  */
+export interface GraderSession {
+  config: GraderConfig;
+  elements: Elements;
+  manual_rows: ManualRow[];
+  /** `null` until a submission is chosen. */
+  source: string | null;
+  /** True while a run is in flight, to reject re-entry. */
+  grading: boolean;
+}
 
-/** @type {ElementIds} Element ids the shared page skeleton provides. */
-const ELEMENT_IDS_DEFAULT = {
+const ELEMENT_IDS_DEFAULT: ElementIds = {
   status: "status",
   run: "run",
   drop: "drop",
@@ -140,59 +149,41 @@ const ELEMENT_IDS_DEFAULT = {
   copy_status: "copystatus",
 };
 
-/** Message shown when a submission does not compile. */
 const SYNTAX_ZERO_MESSAGE = "Syntax error — score is zero per assignment policy.";
 
 /** Prefix `py_runner` puts on a compile failure. */
 const SYNTAX_PREFIX = "SYNTAX:";
 
-/**
- * Read an error's message without assuming it is an `Error`.
- *
- * @param {unknown} error Whatever was thrown or rejected.
- * @returns {string} A human-readable reason.
- */
-function reason_for(error) {
+function reason_for(error: unknown): string {
   const reason = error instanceof Error ? error.message : String(error);
   assert(typeof reason === "string", "reason_for: reason must be a string");
   return reason;
 }
 
 /**
- * Look up a required element, failing loudly when the page is missing it.
- *
- * A missing id is a page bug, not a student problem, and it is far cheaper
- * to catch here than as a `null` dereference three callbacks later.
- *
- * @param {string} id Element id to resolve.
- * @returns {HTMLElement} The element.
+ * A missing id is a page bug, not a student problem, and it is far cheaper to
+ * catch here than as a `null` dereference three callbacks later.
  */
-function require_element(id) {
+function require_element(id: string): HTMLElement {
   assert(typeof id === "string" && id.length > 0, "require_element: id must be non-empty");
   const element = document.getElementById(id);
   assert(element != null, `page is missing an element with id "${id}"`);
-  return /** @type {HTMLElement} */ (element);
+  return element;
 }
 
-/**
- * Resolve every element the page must provide.
- *
- * @param {ElementIds} ids Element ids, after applying any overrides.
- * @returns {Elements} The resolved elements.
- */
-function resolve_elements(ids) {
+function resolve_elements(ids: ElementIds): Elements {
   assert(ids != null && typeof ids === "object", "resolve_elements: ids must be an object");
-  const elements = {
+  const elements: Elements = {
     status: require_element(ids.status),
-    run: /** @type {HTMLButtonElement} */ (require_element(ids.run)),
+    run: require_element(ids.run) as HTMLButtonElement,
     drop: require_element(ids.drop),
-    file: /** @type {HTMLInputElement} */ (require_element(ids.file)),
+    file: require_element(ids.file) as HTMLInputElement,
     filename: require_element(ids.filename),
     rubric: require_element(ids.rubric),
     zero: require_element(ids.zero),
     headline: require_element(ids.headline),
     summary_box: require_element(ids.summary_box),
-    summary: /** @type {HTMLTextAreaElement} */ (require_element(ids.summary)),
+    summary: require_element(ids.summary) as HTMLTextAreaElement,
     copy: require_element(ids.copy),
     copy_status: require_element(ids.copy_status),
   };
@@ -203,22 +194,19 @@ function resolve_elements(ids) {
   return elements;
 }
 
-/**
- * Validate the configuration an assignment page passes in.
- *
- * @param {GraderConfig} config Configuration to validate.
- * @returns {void}
- */
-function check_config(config) {
+function check_config(config: GraderConfig): void {
   assert(config != null && typeof config === "object", "init: config must be an object");
   assert_string(config.filename, "config.filename", FILENAME_CHARS_MAX);
   assert(config.filename.length > 0, "config.filename must not be empty");
-  const cases = assert_array(config.cases, "config.cases", TEST_CASE_COUNT_MAX);
+  const cases = assert_array<TestCase>(config.cases, "config.cases", TEST_CASE_COUNT_MAX);
   assert(cases.length > 0, "config.cases must contain at least one case");
   for (let index = 0; index < cases.length; index++) {
     const test_case = cases[index];
     assert_string(test_case.name, `config.cases[${index}].name`, NEEDLE_CHARS_MAX);
-    assert_array(test_case.stdin_lines, `config.cases[${index}].stdin_lines`, STDIN_LINE_COUNT_MAX);
+    assert_array(
+      test_case.stdin_lines,
+      `config.cases[${index}].stdin_lines`, STDIN_LINE_COUNT_MAX,
+    );
     assert_array(
       test_case.expected_lines,
       `config.cases[${index}].expected_lines`, STDIN_LINE_COUNT_MAX,
@@ -229,13 +217,7 @@ function check_config(config) {
   assert_array(config.manual_rows ?? [], "config.manual_rows", MANUAL_ROW_COUNT_MAX);
 }
 
-/**
- * Render one rubric row.
- *
- * @param {RubricRow} row Row to render.
- * @returns {string} HTML for the row.
- */
-function row_html(row) {
+function row_html(row: RubricRow): string {
   assert(row != null, "row_html: row must not be null");
   assert(
     row.state === "pass" || row.state === "fail" || row.state === "pending",
@@ -254,13 +236,7 @@ function row_html(row) {
       </div>`;
 }
 
-/**
- * Convert a graded rubric item into a display row.
- *
- * @param {import("./rubric.js").GradedItem} item Graded criterion.
- * @returns {RubricRow} The row to render.
- */
-function row_for_item(item) {
+function row_for_item(item: GradedItem): RubricRow {
   assert(item != null, "row_for_item: item must not be null");
   assert(item.earned <= item.points, `row_for_item: "${item.id}" earned more than its points`);
   const partial = !item.pass && item.earned > 0;
@@ -274,13 +250,8 @@ function row_for_item(item) {
   };
 }
 
-/**
- * Build the gate row that reports whether the submission compiled.
- *
- * @param {import("./pyrunner.js").RunResult} probe Result of the syntax probe.
- * @returns {RubricRow} The gate row.
- */
-function row_for_syntax(probe) {
+/** The gate row: a syntax error forces a total score of zero. */
+function row_for_syntax(probe: RunResult): RubricRow {
   assert(probe != null, "row_for_syntax: probe must not be null");
   const failed = probe.err.startsWith(SYNTAX_PREFIX);
   const message = escape_html(probe.err.slice(SYNTAX_PREFIX.length));
@@ -294,18 +265,15 @@ function row_for_syntax(probe) {
   };
 }
 
-/**
- * Build the plain-text summary a student pastes into their submission.
- *
- * @param {object} args Summary inputs.
- * @param {string} args.filename Submitted filename.
- * @param {number} args.total_points Points earned.
- * @param {number} args.max_auto_points Points available automatically.
- * @param {boolean} args.has_syntax_error Whether the submission failed to compile.
- * @param {RubricRow[]} rows Rendered rubric rows, in display order.
- * @returns {string} The summary text.
- */
-function summary_text(args, rows) {
+interface SummaryArgs {
+  filename: string;
+  total_points: number;
+  max_auto_points: number;
+  has_syntax_error: boolean;
+}
+
+/** The plain-text summary a student pastes into their submission. */
+function summary_text(args: SummaryArgs, rows: RubricRow[]): string {
   assert(args != null, "summary_text: args must not be null");
   assert(Array.isArray(rows), "summary_text: rows must be an array");
   const lines = [`${args.filename} — Autograder Summary`];
@@ -320,14 +288,7 @@ function summary_text(args, rows) {
   return lines.join("\n");
 }
 
-/**
- * Read a dropped or chosen file as text.
- *
- * @param {File} file File the student selected.
- * @returns {Promise<string>} The file's text.
- * @throws {Error} If the browser cannot read the file.
- */
-function read_file_text(file) {
+function read_file_text(file: File): Promise<string> {
   assert(file != null, "read_file_text: file must not be null");
   assert(typeof file.name === "string", "read_file_text: file must carry a name");
   return new Promise((resolve, reject) => {
@@ -338,13 +299,7 @@ function read_file_text(file) {
   });
 }
 
-/**
- * Clear the previous run's output.
- *
- * @param {GraderSession} session Page session.
- * @returns {void}
- */
-function reset_output(session) {
+function reset_output(session: GraderSession): void {
   assert(session != null, "reset_output: session must not be null");
   const { elements } = session;
   elements.rubric.innerHTML = "";
@@ -356,16 +311,10 @@ function reset_output(session) {
 }
 
 /**
- * Load a submission and enable grading.
- *
  * A file the browser cannot read, or one too large to be a Python program,
  * leaves the previous submission in place and says why on the status line.
- *
- * @param {GraderSession} session Page session.
- * @param {File | null | undefined} file File the student chose or dropped.
- * @returns {Promise<void>} Resolves once the file is loaded or rejected.
  */
-async function accept_file(session, file) {
+async function accept_file(session: GraderSession, file: File | null | undefined): Promise<void> {
   assert(session != null, "accept_file: session must not be null");
   if (file == null) return;
   const { config, elements } = session;
@@ -392,40 +341,29 @@ async function accept_file(session, file) {
   elements.status.textContent = "File loaded. Ready to grade.";
 }
 
-/**
- * Run every test case and score the rubric.
- *
- * @param {GraderSession} session Page session, with a submission loaded.
- * @returns {Promise<import("./rubric.js").GradeReport>} The scored rubric.
- */
-async function score_submission(session) {
+async function score_submission(session: GraderSession): Promise<GradeReport> {
   assert(session.source != null, "score_submission: no submission loaded");
   const { config } = session;
+  const source = session.source;
 
-  /** @type {import("./pyrunner.js").RunResult[]} */
-  const results = [];
+  const results: RunResult[] = [];
   for (let index = 0; index < config.cases.length; index++) {
     const stdin_lines = config.cases[index].stdin_lines;
-    results.push(await py_runner.run(session.source, stdin_lines, { filename: config.filename }));
+    results.push(await py_runner.run(source, stdin_lines, { filename: config.filename }));
   }
   assert(results.length === config.cases.length, "score_submission: one result per case");
 
   const criteria = config.build_criteria(results);
   assert_array(criteria, "build_criteria() result", CRITERION_COUNT_MAX);
-  return rubric.grade(criteria, { source: session.source, results });
+  return rubric.grade(criteria, { source, results });
 }
 
 /**
- * Grade the loaded submission and render the result.
- *
- * A submission that does not compile scores zero by assignment policy, so
- * the syntax probe gates everything: there is no point diffing the output of
- * a program that never ran.
- *
- * @param {GraderSession} session Page session, with a submission loaded.
- * @returns {Promise<void>} Resolves once the page is updated.
+ * A submission that does not compile scores zero by assignment policy, so the
+ * syntax probe gates everything: there is no point diffing the output of a
+ * program that never ran.
  */
-async function grade_submission(session) {
+async function grade_submission(session: GraderSession): Promise<void> {
   assert(session.source != null, "grade_submission: no submission loaded");
   assert(py_runner.is_ready(), "grade_submission: Python runtime is not ready");
   const { config, elements } = session;
@@ -435,8 +373,7 @@ async function grade_submission(session) {
     filename: config.filename,
   });
   const has_syntax_error = probe.err.startsWith(SYNTAX_PREFIX);
-  /** @type {RubricRow[]} */
-  const rows = [row_for_syntax(probe)];
+  const rows: RubricRow[] = [row_for_syntax(probe)];
 
   let total_points = 0;
   if (has_syntax_error) {
@@ -466,15 +403,10 @@ async function grade_submission(session) {
 }
 
 /**
- * Copy the summary to the clipboard.
- *
  * Falls back to the legacy selection copy, because a browser may refuse the
  * async clipboard on a page opened over `file://`.
- *
- * @param {GraderSession} session Page session.
- * @returns {Promise<void>} Resolves once the copy attempt finishes.
  */
-async function copy_summary(session) {
+async function copy_summary(session: GraderSession): Promise<void> {
   assert(session != null, "copy_summary: session must not be null");
   const { elements } = session;
   const text = elements.summary.value;
@@ -491,19 +423,13 @@ async function copy_summary(session) {
   }
 }
 
-/**
- * Wire the drop zone and the file input.
- *
- * @param {GraderSession} session Page session.
- * @returns {void}
- */
-function wire_file_input(session) {
+function wire_file_input(session: GraderSession): void {
   assert(session != null, "wire_file_input: session must not be null");
   const { elements } = session;
 
   elements.drop.addEventListener("click", () => elements.file.click());
   elements.file.addEventListener("change", (event) => {
-    const input = /** @type {HTMLInputElement} */ (event.target);
+    const input = event.target as HTMLInputElement;
     void accept_file(session, input.files?.[0]);
   });
   for (const event_name of ["dragenter", "dragover"]) {
@@ -519,18 +445,12 @@ function wire_file_input(session) {
     });
   }
   elements.drop.addEventListener("drop", (event) => {
-    const transfer = /** @type {DragEvent} */ (event).dataTransfer;
+    const transfer = (event as DragEvent).dataTransfer;
     void accept_file(session, transfer?.files[0]);
   });
 }
 
-/**
- * Wire the grade and copy buttons.
- *
- * @param {GraderSession} session Page session.
- * @returns {void}
- */
-function wire_buttons(session) {
+function wire_buttons(session: GraderSession): void {
   assert(session != null, "wire_buttons: session must not be null");
   const { elements } = session;
 
@@ -556,13 +476,7 @@ function wire_buttons(session) {
   elements.copy.addEventListener("click", () => void copy_summary(session));
 }
 
-/**
- * Load the Python runtime, reporting progress on the status line.
- *
- * @param {GraderSession} session Page session.
- * @returns {Promise<void>} Resolves once the runtime is up or has failed.
- */
-async function boot(session) {
+async function boot(session: GraderSession): Promise<void> {
   assert(session != null, "boot: session must not be null");
   const { elements } = session;
   try {
@@ -574,35 +488,23 @@ async function boot(session) {
   elements.run.disabled = session.source == null;
 }
 
-/**
- * Resolve the element the skeleton renders into.
- *
- * @param {HTMLElement | string | undefined} mount Element, selector, or nothing.
- * @returns {HTMLElement} The mount point; `document.body` by default.
- */
-function resolve_mount(mount) {
+function resolve_mount(mount: HTMLElement | string | undefined): HTMLElement {
   if (mount == null) return document.body;
   if (typeof mount === "string") {
     const found = document.querySelector(mount);
     assert(found != null, `init: no element matches the mount selector "${mount}"`);
-    return /** @type {HTMLElement} */ (found);
+    return found as HTMLElement;
   }
   assert(mount instanceof HTMLElement, "init: mount must be an element or a selector");
   return mount;
 }
 
 /**
- * Build the page skeleton, unless the page already provides the markup.
- *
  * Detection is by the grade button: a hand-written page that carries the
- * elements keeps them, and everything else gets the generated skeleton, so
- * an assignment page is a title, a stylesheet, and its data.
- *
- * @param {GraderConfig} config Assignment configuration.
- * @param {ElementIds} ids Element ids, after applying any overrides.
- * @returns {boolean} True when the skeleton was rendered.
+ * elements keeps them, and everything else gets the generated skeleton, so an
+ * assignment page is a title, a stylesheet, and its data.
  */
-function ensure_page(config, ids) {
+function ensure_page(config: GraderConfig, ids: ElementIds): boolean {
   assert(config != null, "ensure_page: config must not be null");
   assert(ids != null, "ensure_page: ids must not be null");
   if (document.getElementById(ids.run) != null) return false;
@@ -621,25 +523,22 @@ function ensure_page(config, ids) {
     footer: config.footer,
     mount: resolve_mount(config.mount),
   });
-  assert(document.getElementById(ids.run) != null, "ensure_page: the skeleton must provide a button");
+  assert(
+    document.getElementById(ids.run) != null,
+    "ensure_page: the skeleton must provide a button",
+  );
   return true;
 }
 
 /**
- * Wire up a browser autograder page.
- *
- * The page needs no markup of its own: when the grader elements are absent,
- * this renders the skeleton before wiring anything up.
- *
- * @param {GraderConfig} config Assignment-specific configuration.
- * @returns {void}
+ * Wire up a browser autograder page. The page needs no markup of its own:
+ * when the grader elements are absent, this renders the skeleton first.
  */
-export function init(config) {
+export function init(config: GraderConfig): void {
   check_config(config);
-  const ids = { ...ELEMENT_IDS_DEFAULT, ...(config.element_ids ?? {}) };
+  const ids: ElementIds = { ...ELEMENT_IDS_DEFAULT, ...(config.element_ids ?? {}) };
   ensure_page(config, ids);
-  /** @type {GraderSession} */
-  const session = {
+  const session: GraderSession = {
     config,
     elements: resolve_elements(ids),
     manual_rows: config.manual_rows ?? [],
@@ -650,5 +549,8 @@ export function init(config) {
   wire_file_input(session);
   wire_buttons(session);
   void boot(session);
-  assert(session.source === null, "init: no submission may be loaded before the student picks one");
+  assert(
+    session.source === null,
+    "init: no submission may be loaded before the student picks one",
+  );
 }

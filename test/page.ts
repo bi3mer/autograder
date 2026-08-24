@@ -5,30 +5,34 @@
  * way, which is enough to check that every element the grader wires up
  * exists, that a hand-written page keeps its own markup, and that a missing
  * element fails loudly rather than silently.
- *
- * Run with `npm test`, which runs this after the smoke tests.
  */
 
 import assert_node from "node:assert/strict";
 import { JSDOM } from "jsdom";
-import { AssertionError } from "../src/assert.js";
+import { AssertionError } from "../src/assert.ts";
+import type { GraderConfig } from "../src/grader.ts";
 
 let passed = 0;
 
-/**
- * Run one named test against a fresh document.
- *
- * @param {string} name What the test asserts.
- * @param {(dom: JSDOM) => void | Promise<void>} body Test body.
- * @param {string} [html="<!doctype html><title>T</title>"] Starting document.
- * @returns {Promise<void>} Resolves when the test passes.
- */
-async function test(name, body, html = "<!doctype html><title>Habit Cost</title>") {
+/** Each test gets a fresh document, with the globals restored afterwards. */
+async function test(
+  name: string,
+  body: (dom: JSDOM) => void | Promise<void>,
+  html = "<!doctype html><title>Habit Cost</title>",
+): Promise<void> {
   const dom = new JSDOM(html, { url: "https://example.test/cs230/a1.html" });
-  const previous = { document: globalThis.document, HTMLElement: globalThis.HTMLElement };
-  globalThis.document = dom.window.document;
-  globalThis.HTMLElement = dom.window.HTMLElement;
-  globalThis.HTMLScriptElement = dom.window.HTMLScriptElement;
+  const global_scope = globalThis as unknown as {
+    document: Document,
+    HTMLElement: typeof HTMLElement,
+    HTMLScriptElement: typeof HTMLScriptElement,
+  };
+  const previous = {
+    document: global_scope.document,
+    HTMLElement: global_scope.HTMLElement,
+  };
+  global_scope.document = dom.window.document;
+  global_scope.HTMLElement = dom.window.HTMLElement;
+  global_scope.HTMLScriptElement = dom.window.HTMLScriptElement;
   try {
     await body(dom);
   } finally {
@@ -38,10 +42,9 @@ async function test(name, body, html = "<!doctype html><title>Habit Cost</title>
   console.log(`  ok  ${name}`);
 }
 
-const { grader_app } = await import("../src/index.js");
+const { grader_app } = await import("../src/index.ts");
 
-/** Minimum viable assignment configuration. */
-const CONFIG = {
+const CONFIG: GraderConfig = {
   filename: "program1.py",
   cases: [{ name: "one", stdin_lines: ["x"], expected_lines: ["x"] }],
   build_criteria: () => [],
@@ -63,21 +66,36 @@ await test("init renders every element the grader wires up", (dom) => {
 await test("the heading defaults to the document title", (dom) => {
   grader_app.init({ ...CONFIG });
   assert_node.equal(dom.window.document.querySelector("h1")?.textContent, "Habit Cost");
-  assert_node.equal(dom.window.document.querySelector(".sub")?.textContent, "Assignment 1 · program1.py");
-  assert_node.equal(dom.window.document.querySelector("footer")?.textContent, "Runs in your browser.");
+  assert_node.equal(
+    dom.window.document.querySelector(".sub")?.textContent,
+    "Assignment 1 · program1.py",
+  );
+  assert_node.equal(
+    dom.window.document.querySelector("footer")?.textContent,
+    "Runs in your browser.",
+  );
 });
 
 await test("the drop prompt and score caption come from the config", (dom) => {
   grader_app.init({ ...CONFIG });
-  assert_node.equal(dom.window.document.querySelector(".drop strong")?.textContent, "Drop program1.py here");
-  assert_node.equal(dom.window.document.querySelector(".points-of .lbl")?.textContent, "/ 45 auto");
+  assert_node.equal(
+    dom.window.document.querySelector(".drop strong")?.textContent,
+    "Drop program1.py here",
+  );
+  assert_node.equal(
+    dom.window.document.querySelector(".points-of .lbl")?.textContent,
+    "/ 45 auto",
+  );
   assert_node.equal(dom.window.document.getElementById("headline")?.textContent, "—");
 });
 
 await test("a title containing markup is escaped, not injected", (dom) => {
   grader_app.init({ ...CONFIG, title: "<img src=x onerror=alert(1)>" });
   assert_node.equal(dom.window.document.querySelectorAll("img").length, 0);
-  assert_node.equal(dom.window.document.querySelector("h1")?.textContent, "<img src=x onerror=alert(1)>");
+  assert_node.equal(
+    dom.window.document.querySelector("h1")?.textContent,
+    "<img src=x onerror=alert(1)>",
+  );
 });
 
 await test("a page that supplies its own markup keeps it", (dom) => {
@@ -91,8 +109,8 @@ await test("a page that supplies its own markup keeps it", (dom) => {
   <div id="summarybox"><span id="copystatus"></span><button id="copy"></button>
   <textarea id="summary"></textarea></div></body>`);
 
-await test("a half-written page fails loudly on the missing element", (dom) => {
-  assert_node.throws(() => grader_app.init({ ...CONFIG }), (error) => {
+await test("a half-written page fails loudly on the missing element", () => {
+  assert_node.throws(() => grader_app.init({ ...CONFIG }), (error: unknown) => {
     assert_node.ok(error instanceof AssertionError);
     assert_node.match(error.message, /page is missing an element with id "status"/);
     return true;
@@ -116,7 +134,7 @@ await test("styles_href adds one stylesheet link, and only one", (dom) => {
 await test("a stylesheet the page already links is not added twice", (dom) => {
   grader_app.init({ ...CONFIG, styles_href: "../css/a1.css" });
   assert_node.equal(dom.window.document.querySelectorAll('link[rel="stylesheet"]').length, 1);
-}, `<!doctype html><title>T</title><link rel="stylesheet" href="/css/a1.css"><body></body>`);
+}, '<!doctype html><title>T</title><link rel="stylesheet" href="/css/a1.css"><body></body>');
 
 await test("styles_href false adds no link", (dom) => {
   grader_app.init({ ...CONFIG, styles_href: false });
@@ -128,7 +146,8 @@ await test("a page with no Pyodide reports it instead of hanging", async (dom) =
   await new Promise((resolve) => setTimeout(resolve, 0));
   const status = dom.window.document.getElementById("status")?.textContent ?? "";
   assert_node.match(status, /Python runtime failed to load/);
-  assert_node.equal(/** @type {any} */ (dom.window.document.getElementById("run")).disabled, true);
+  const run = dom.window.document.getElementById("run") as HTMLButtonElement;
+  assert_node.equal(run.disabled, true);
 });
 
 console.log(`\n${passed} DOM tests passed`);

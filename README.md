@@ -15,18 +15,18 @@ the commit that produced it, so a stale bundle cannot ship.
 
 | Path     | What lives there                                            |
 | -------- | ----------------------------------------------------------- |
-| `src/`   | The grading engine, as ES modules with JSDoc types          |
+| `src/`   | The grading engine, as TypeScript ES modules                |
 | `dist/`  | Built bundles, gitignored; `npm run build` creates them     |
 | `css/`   | Page styles shared by assignment pages                      |
 | `cs230/` | One HTML page per assignment: test cases and rubric only    |
 | `index.html` | Site root: a placeholder page on the shared dark theme  |
 | `test/`  | Node tests: the grading engine, and the page under jsdom    |
 
-`src/` holds six modules. `assert.js` provides the assertions, which stay
-enabled in every build. `checks.js` does substring matching and line diffing
-over plain strings. `pyrunner.js` loads Pyodide and runs one submission
-against canned stdin. `rubric.js` scores an array of criterion objects.
-`page.js` generates the page markup, and `grader.js` wires everything to the
+`src/` holds six modules. `assert.ts` provides the assertions, which stay
+enabled in every build. `checks.ts` does substring matching and line diffing
+over plain strings. `pyrunner.ts` loads Pyodide and runs one submission
+against canned stdin. `rubric.ts` scores an array of criterion objects.
+`page.ts` generates the page markup, and `grader.ts` wires everything to the
 DOM.
 
 ## Using the Bundle in an HTML Page
@@ -90,8 +90,8 @@ Copy `cs230/a1.html`, then replace two things: `CASES` (the stdin and expected
 output for each example in the handout) and `build_criteria` (the rubric).
 Everything else is shared, and the page is about a dozen lines around that
 data. Criterion types are `code`, `output`, `code-regex`,
-`output-diff`, `flake8`, and `custom`; see the `Criterion` typedef in
-`src/rubric.js` for every field.
+`output-diff`, `flake8`, and `custom`; see the `Criterion` interface in
+`src/rubric.ts` for every field.
 
 Scoring is proportional wherever partial work deserves partial credit. A
 `code` criterion in the default `all` mode awards points in proportion to how
@@ -105,9 +105,9 @@ point per finding, with a floor of zero.
 npm install
 npm run build       # required first: dist/ is gitignored, so a clone has none
 npm run serve       # http://localhost:8000/cs230/a1.html
-npm run typecheck   # tsc --checkJs against the JSDoc types
+npm run typecheck   # tsc against src/, test/, and the build scripts
 npm test            # 16 engine tests, then 11 DOM tests under jsdom
-npm run docs        # generate docs/api from the JSDoc comments
+npm run docs        # generate docs/api from the types and doc comments
 npm run check       # typecheck, then build
 ```
 
@@ -115,9 +115,18 @@ Build before serving, and serve over HTTP rather than opening the page
 directly: `dist/` starts empty in a fresh clone, and Pyodide fetches its
 WebAssembly runtime, which a `file://` page cannot do.
 
-The types are JSDoc comments checked by TypeScript in `checkJs` mode, so
-`npm run typecheck` catches a misspelled criterion field without adding a
-build step to the source. There is no `.ts` file in the repository.
+Node runs the TypeScript directly by stripping the types, so `npm test`,
+`npm run build`, and `npm run site` execute `.ts` files with no compile step
+in between. That needs Node 24 or newer, which `engines` states and CI pins.
+Two settings in `tsconfig.json` keep that working: `allowImportingTsExtensions`,
+because nothing rewrites an import path, so every relative import names the
+`.ts` file it resolves to; and `erasableSyntaxOnly`, so `tsc` rejects syntax
+that type stripping cannot erase (enums, namespaces, parameter properties)
+rather than Node rejecting it at run time.
+
+Types live in the source rather than in a `.d.ts`, and `tsc --noEmit` is the
+only thing that reads them: esbuild strips them when it bundles, so `dist/`
+is plain JavaScript and the browser never sees TypeScript.
 
 ## Deploying
 
@@ -143,20 +152,26 @@ npm run hooks:install
 
 ## Code Style
 
-The JavaScript follows [TIGER_STYLE](https://github.com/tigerbeetle/tigerbeetle/blob/main/docs/TIGER_STYLE.md),
-including `snake_case` identifiers. In practice that means four habits:
+The TypeScript follows [TIGER_STYLE](https://github.com/tigerbeetle/tigerbeetle/blob/main/docs/TIGER_STYLE.md),
+including `snake_case` identifiers. In practice that means five habits:
 
 Assertions are everywhere and stay enabled in production builds, including the
 minified one. Every function asserts its arguments and its postconditions. A
 grader that throws loudly in front of one instructor costs less than a grader
 that quietly awards the wrong score to two hundred students.
 
-Every limit is explicit and lives in `src/constants.js`, so every loop runs
+Every limit is explicit and lives in `src/constants.ts`, so every loop runs
 against a stated bound. A pasted binary or a runaway `while True` print loop
 fails an assertion at the boundary instead of hanging the tab.
 
 Functions stay under 70 lines and do one thing. Names carry their units and
 avoid abbreviation: `max_line_length_chars`, not `maxLen`.
+
+Comments explain why, never what. The signature already states the types and
+the name already states the intent, so a comment earns its place only by
+saying something neither can: why the regex `lastIndex` is reset between
+submissions, why flake8's structured results are read instead of its
+formatter, why points round once at the end rather than per case.
 
 Errors are handled where they happen, and a degraded path names its reason.
 When flake8 fails to install, the rubric row says so and the regex fallback
