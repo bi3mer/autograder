@@ -97,18 +97,7 @@ button.ghost { background: transparent; color: var(--text); border: 1px solid va
 .r-detail .good { color: var(--pass); }
 .r-detail .bad { color: var(--fail); }
 .r-score { font-size: 14px; white-space: nowrap; text-align: right; color: var(--muted); }
-
-.total {
-  margin-top: 20px;
-  border: 1px solid var(--line);
-  border-radius: 6px;
-  padding: 16px 20px;
-  display: flex;
-  justify-content: space-between;
-  align-items: center;
-}
-.total .word { font-size: 12px; letter-spacing: 1.5px; text-transform: uppercase; color: var(--muted); }
-.total .num { font-size: 28px; font-weight: 700; }
+.word { font-size: 12px; letter-spacing: 1.5px; text-transform: uppercase; color: var(--muted); }
 
 details.diff { margin-top: 8px; }
 details.diff summary { cursor: pointer; font-size: 12px; color: var(--muted); }
@@ -124,6 +113,34 @@ pre.io {
   border-radius: 6px;
 }
 pre.io .miss { background: rgba(248,81,73,0.2); }
+
+.summarybox {
+  margin-top: 16px;
+  border: 1px solid var(--line);
+  border-radius: 6px;
+  padding: 14px 16px;
+}
+.summarybox-head {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  margin-bottom: 10px;
+}
+.copy-wrap { display: flex; align-items: center; gap: 10px; }
+.copy-wrap button { padding: 6px 12px; font-size: 12px; }
+#summary {
+  width: 100%;
+  min-height: 160px;
+  resize: vertical;
+  background: #010409;
+  color: var(--text);
+  border: 1px solid var(--line);
+  border-radius: 6px;
+  font-family: inherit;
+  font-size: 12px;
+  line-height: 1.5;
+  padding: 10px 12px;
+}
 
 .zero-banner {
   margin-top: 16px;

@@ -11,7 +11,7 @@
 //     name: "Prompts for habit name",
 //     desc: "shown under the rubric row",
 //     points: 3,
-//     type: "code" | "output" | "output-diff" | "flake8" | "custom",
+//     type: "code" | "output" | "code-regex" | "output-diff" | "flake8" | "custom",
 //     needle: 'input("Habit name: ")',   // single substring, OR:
 //     needles: ["Spend per day:", ['input("x: ")', "input('x: ')"]],  // multiple
 //                                    // substrings; an entry can itself be an
@@ -22,6 +22,12 @@
 //                                    // alternatives for the same thing —
 //                                    // finding one is full credit.
 //     caseSensitive: true,          // default true
+//     // type: "code-regex" options: pass/fail on whether a RegExp matches
+//     // the source. Use this instead of "code" + needle when a plain
+//     // substring can't tell a real match from a false positive (e.g. an
+//     // f-string prefix f" vs. a .format() spec like ".2f" ending in the
+//     // same two characters right before a closing quote).
+//     regex: /\bf["']/,             // required for type: "code-regex"
 //     // type: "flake8" options:
 //     filename: "program1.py",      // default "submission.py"
 //     maxLineLength: 99,
@@ -92,6 +98,19 @@ const Rubric = (() => {
     throw new Error(`Rubric: criterion "${item.id}" needs a "needle" or "needles".`);
   }
 
+  function codeRegexCheck(item, ctx) {
+    if (!(item.regex instanceof RegExp)) {
+      throw new Error(`Rubric: criterion "${item.id}" has type "code-regex" but no RegExp "regex".`);
+    }
+    // Reset lastIndex: a "g"/"y" regex is reused across every grading run in
+    // this page session, and .test() advances lastIndex on match — without
+    // this a submission could spuriously fail depending on what the last
+    // submission's source did to the regex's internal state.
+    item.regex.lastIndex = 0;
+    const ok = item.regex.test(ctx.source || "");
+    return { pass: ok, detail: ok ? `Matched ${item.regex}.` : `No match for ${item.regex}.` };
+  }
+
   async function flake8Check(item, ctx) {
     const points = item.points ?? 0;
     const filename = item.filename || "submission.py";
@@ -156,6 +175,7 @@ const Rubric = (() => {
 
   async function runCheck(item, ctx) {
     if (item.type === "flake8") return flake8Check(item, ctx);
+    if (item.type === "code-regex") return codeRegexCheck(item, ctx);
     if (item.type === "output-diff") return outputDiffCheck(item, ctx);
     if (item.type === "custom") {
       if (typeof item.check !== "function") {

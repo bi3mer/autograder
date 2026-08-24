@@ -34,7 +34,6 @@
 
     <div class="actions">
       <button id="run" disabled>Grade submission</button>
-      <button id="reset" class="ghost">Reset</button>
       <span class="status" id="status">Loading Python runtime…</span>
     </div>
 
@@ -42,9 +41,15 @@
 
     <div id="zero" style="display:none" class="zero-banner"></div>
 
-    <div class="total" id="totalbox" style="display:none">
-      <span class="word">Auto-graded score (of 50 total — see notes below)</span>
-      <span class="num" id="totalnum">0 / 45</span>
+    <div class="summarybox" id="summarybox" style="display:none">
+      <div class="summarybox-head">
+        <span class="word">Summary</span>
+        <span class="copy-wrap">
+          <span class="status" id="copystatus"></span>
+          <button id="copy" class="ghost">Copy to clipboard</button>
+        </span>
+      </div>
+      <textarea id="summary" readonly spellcheck="false"></textarea>
     </div>
   </div>
 </div>
@@ -147,17 +152,22 @@ function buildCriteria(results) {
       type: "output", needle: "\t",
     },
     {
-      // Substring check, not a full parser: a rare false positive is possible
-      // (e.g. a dict literal like d["f"]), but this is a grading *preview*
-      // tool, and that shape doesn't come up in a habit-cost calculator.
+      // Regex, not a full parser: requires the f/rf prefix to sit right
+      // before the opening quote (a word boundary before it), so a
+      // .format() spec like ".2f" immediately before a closing quote
+      // doesn't count — that was a real false positive under a plain
+      // "f\"" substring check. A dict literal like d["f"] can still slip
+      // through (the "f" there is also preceded by a quote), but that
+      // shape doesn't come up in a habit-cost calculator, and this is a
+      // grading *preview* tool.
       id: "fstrings", name: "Use of f-strings", points: 2.5,
       desc: "Use of f-strings in code",
-      type: "code", needles: ["f\"", "f'"], mode: "any",
+      type: "code-regex", regex: /\b(?:[rR]?[fF]|[fF][rR])["']/,
     },
     {
       id: "flake8", name: "flake8", points: 10,
-      desc: "Passes flake8 with no violations.",
-      type: "flake8", filename: "program1.py",
+      desc: "−1 point per flake8 finding, down to a floor of 0.",
+      type: "flake8", filename: "program1.py", partial: true,
     },
   ];
 }
