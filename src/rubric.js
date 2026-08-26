@@ -8,120 +8,55 @@
  * `py_runner.run()`.
  */
 
-import { assert, assert_array, assert_range, assert_string, unreachable } from "./assert.ts";
-import * as checks from "./checks.ts";
-import type { DiffRow, Needle } from "./checks.ts";
-import { escape_html } from "./html.ts";
-import * as py_runner from "./pyrunner.ts";
-import type { RunResult } from "./pyrunner.ts";
+import { assert, assert_array, assert_range, assert_string, unreachable } from "./assert.js";
+import * as checks from "./checks.js";
+import { escape_html } from "./html.js";
+import * as py_runner from "./pyrunner.js";
 import {
   CRITERION_COUNT_MAX, LINE_COUNT_MAX, LINE_LENGTH_CHARS_DEFAULT, LINE_LENGTH_CHARS_MAX,
   LINT_FINDING_SHOWN_DEFAULT, NEEDLE_CHARS_MAX, NEEDLE_COUNT_MAX, OUTPUT_BYTES_MAX,
   POINTS_MAX, SOURCE_BYTES_MAX, TEST_CASE_COUNT_MAX,
-} from "./constants.ts";
+} from "./constants.js";
 
 /**
+ * A criterion is a plain object. `id` and `name` label the rubric row, and
+ * `points` is what the row is worth. `description` adds a sub-line under the
+ * title, and `type` picks the check, defaulting to `"code"`:
+ *
  * - `code`: substring match against the submitted source.
  * - `output`: substring match against the concatenated stdout.
- * - `code-regex`: `RegExp` match against the source, for when a plain
+ * - `code-regex`: `regex` matched against the source, for when a plain
  *   substring cannot tell a real hit from a false positive.
- * - `output-diff`: per-line diff of each case's stdout against expected.
- * - `flake8`: style findings from flake8, or the regex fallback.
- * - `custom`: the criterion supplies its own `check(context)`.
+ * - `output-diff`: per-line diff of each `cases` entry (`{ name,
+ *   expected_lines }`) against the matching run, skipping output before
+ *   `anchor_prefix` and paying `points_per_case` (`points / cases.length` by
+ *   default).
+ * - `flake8`: style findings from flake8, or the regex fallback. `partial`
+ *   deducts one point per finding instead of scoring clean-or-nothing, and
+ *   `max_findings_shown` and `max_line_length_chars` tune the report.
+ * - `custom`: the criterion supplies `check(context)`.
+ *
+ * A `code` or `output` criterion carries `needle`, or `needles` where an
+ * entry may itself be a list of alternative spellings. `mode` is `"all"` (the
+ * default: the needles are independent, and credit is proportional to how
+ * many were found) or `"any"` (they spell one thing, so one hit is full
+ * credit). `case_sensitive` defaults to true.
+ *
+ * A check receives `{ source, results, combined_output }` and returns
+ * `{ pass, earned, detail, detail_is_html }`, all optional: `pass` is the
+ * all-or-nothing outcome, ignored when `earned` names the partial credit,
+ * `detail` explains the row, and `detail_is_html` says it is already markup.
+ *
+ * `grade` returns `{ items, total, max }`, where each item is `{ id, name,
+ * description, points, earned, pass, detail, detail_is_html }` with `earned`
+ * clamped to `[0, points]`.
  */
-export type CriterionType =
-  "code" | "output" | "code-regex" | "output-diff" | "flake8" | "custom";
-
-export interface DiffCase {
-  name: string;
-  /** Required output, one entry per line. */
-  expected_lines: string[];
-}
-
-export interface GradeContext {
-  source: string;
-  /** One run per test case. */
-  results: RunResult[];
-  /** Cached `results` stdout, joined by newlines. */
-  combined_output?: string;
-}
-
-export interface CheckResult {
-  /** All-or-nothing outcome; ignored when `earned` is set. */
-  pass?: boolean;
-  /** Points earned, for partial credit. */
-  earned?: number;
-  /** Explanation shown under the rubric row. */
-  detail?: string;
-  /** `detail` is already HTML; do not escape it. */
-  detail_is_html?: boolean;
-}
-
-export interface Criterion {
-  id: string;
-  /** Row title. */
-  name: string;
-  points: number;
-  /** Defaults to `"code"`. */
-  type?: CriterionType;
-  /** Sub-line shown under the title. */
-  description?: string;
-  needle?: string;
-  /** An entry may itself be a list of alternatives. */
-  needles?: Needle[];
-  /**
-   * `"all"` (the default): needles are independent, and credit is
-   * proportional to how many were found. `"any"`: needles are alternative
-   * spellings of one thing, so finding one is full credit.
-   */
-  mode?: "all" | "any";
-  case_sensitive?: boolean;
-  /** Pattern for `code-regex`. */
-  regex?: RegExp;
-  max_line_length_chars?: number;
-  /**
-   * flake8 scoring: `false` (the default) means clean is full points and
-   * anything else is zero; `true` deducts one point per finding.
-   */
-  partial?: boolean;
-  max_findings_shown?: number;
-  /** For `output-diff`, aligned by index with `context.results`. */
-  cases?: DiffCase[];
-  /** Skip output lines before this prefix. */
-  anchor_prefix?: string;
-  /** Defaults to `points / cases.length`. */
-  points_per_case?: number;
-  /** Checker for `custom`. */
-  check?: (context: GradeContext) => CheckResult | Promise<CheckResult>;
-}
-
-export interface GradedItem {
-  id: string;
-  name: string;
-  description: string;
-  points: number;
-  /** Clamped to `[0, points]`. */
-  earned: number;
-  /** Whether full points were earned. */
-  pass: boolean;
-  detail: string;
-  detail_is_html: boolean;
-}
-
-export interface GradeReport {
-  /** One entry per criterion, in rubric order. */
-  items: GradedItem[];
-  /** Sum of `earned`, rounded to two decimals. */
-  total: number;
-  /** Sum of `points` across the rubric. */
-  max: number;
-}
 
 /**
  * Scores are money-like: 6.666… points must display as 6.67, and a total must
  * not drift by a stray cent.
  */
-function round_points(points: number): number {
+function round_points(points) {
   assert(
     typeof points === "number" && Number.isFinite(points),
     "round_points: points must be finite",
@@ -135,7 +70,7 @@ function round_points(points: number): number {
 }
 
 /** Source for `code`, combined stdout for `output`. */
-function text_for(criterion: Criterion, context: GradeContext): string {
+function text_for(criterion, context) {
   assert(criterion != null, "text_for: criterion must not be null");
   assert(context != null, "text_for: context must not be null");
   if (criterion.type === "code" || criterion.type === undefined) return context.source ?? "";
@@ -143,13 +78,13 @@ function text_for(criterion: Criterion, context: GradeContext): string {
   return unreachable(`type "${criterion.type}" has no default text source; use type "custom"`);
 }
 
-function quote_labels(labels: string[]): string {
+function quote_labels(labels) {
   assert(Array.isArray(labels), "quote_labels: labels must be an array");
   assert(labels.length <= NEEDLE_COUNT_MAX, `quote_labels: at most ${NEEDLE_COUNT_MAX} labels`);
   return labels.map((label) => `"${label}"`).join(", ");
 }
 
-function match_text(text: string, criterion: Criterion): CheckResult {
+function match_text(text, criterion) {
   assert_string(text, `criterion "${criterion.id}": text`, OUTPUT_BYTES_MAX);
   const options = { case_sensitive: criterion.case_sensitive !== false };
 
@@ -161,7 +96,7 @@ function match_text(text: string, criterion: Criterion): CheckResult {
   }
 
   assert(criterion.needles != null, `criterion "${criterion.id}" needs a "needle" or "needles"`);
-  const needles = assert_array<Needle>(
+  const needles = assert_array(
     criterion.needles, `criterion "${criterion.id}": needles`, NEEDLE_COUNT_MAX,
   );
   assert(needles.length > 0, `criterion "${criterion.id}": needles must not be empty`);
@@ -188,13 +123,13 @@ function match_text(text: string, criterion: Criterion): CheckResult {
  * across realms, because the tag travels with the object rather than with the
  * constructor that made it.
  */
-function is_regexp(value: unknown): value is RegExp {
+function is_regexp(value) {
   const tag = Object.prototype.toString.call(value);
   assert(typeof tag === "string" && tag.length > 0, "is_regexp: brand check must yield a tag");
   return tag === "[object RegExp]";
 }
 
-function code_regex_check(criterion: Criterion, context: GradeContext): CheckResult {
+function code_regex_check(criterion, context) {
   const regex = criterion.regex;
   assert(is_regexp(regex), `criterion "${criterion.id}": type "code-regex" needs a RegExp`);
   assert(
@@ -211,10 +146,7 @@ function code_regex_check(criterion: Criterion, context: GradeContext): CheckRes
 }
 
 /** The engine is returned alongside so the row can say which one ran. */
-async function collect_findings(
-  source: string,
-  max_line_length_chars: number,
-): Promise<{ findings: string[], engine: string }> {
+async function collect_findings(source, max_line_length_chars) {
   assert_string(source, "collect_findings: source", SOURCE_BYTES_MAX);
   assert(
     Number.isFinite(max_line_length_chars),
@@ -241,7 +173,7 @@ async function collect_findings(
   }
 }
 
-async function flake8_check(criterion: Criterion, context: GradeContext): Promise<CheckResult> {
+async function flake8_check(criterion, context) {
   assert(criterion.type === "flake8", `criterion "${criterion.id}": expected type "flake8"`);
   assert(
     typeof context.source === "string",
@@ -274,7 +206,7 @@ async function flake8_check(criterion: Criterion, context: GradeContext): Promis
 }
 
 /** A `<details>` block, collapsed so a long diff does not bury the rubric. */
-function render_diff_html(rows: DiffRow[]): string {
+function render_diff_html(rows) {
   assert(Array.isArray(rows), "render_diff_html: rows must be an array");
   assert(rows.length <= LINE_COUNT_MAX, `render_diff_html: at most ${LINE_COUNT_MAX} rows`);
   const body = rows.map((row) => (row.ok
@@ -293,11 +225,11 @@ function render_diff_html(rows: DiffRow[]): string {
  * rounding each case first and summing can overshoot the total (three cases
  * at 6.666… round to 6.67 each, which sums to 20.01, not 20).
  */
-function output_diff_check(criterion: Criterion, context: GradeContext): CheckResult {
-  const cases = assert_array<DiffCase>(
+function output_diff_check(criterion, context) {
+  const cases = assert_array(
     criterion.cases ?? [], `criterion "${criterion.id}": cases`, TEST_CASE_COUNT_MAX,
   );
-  const results = assert_array<RunResult>(
+  const results = assert_array(
     context.results ?? [], `criterion "${criterion.id}": results`, TEST_CASE_COUNT_MAX,
   );
   const points_per_case = criterion.points_per_case ??
@@ -340,7 +272,7 @@ function output_diff_check(criterion: Criterion, context: GradeContext): CheckRe
  * Rubrics are hand-written per assignment, so a typo here is a grading bug
  * that would otherwise surface as a silently wrong score.
  */
-function check_criterion(criterion: Criterion, index: number): void {
+function check_criterion(criterion, index) {
   assert(
     criterion != null && typeof criterion === "object",
     `criteria[${index}] must be an object`,
@@ -356,7 +288,7 @@ function check_criterion(criterion: Criterion, index: number): void {
   );
 }
 
-async function run_check(criterion: Criterion, context: GradeContext): Promise<CheckResult> {
+async function run_check(criterion, context) {
   assert(criterion != null, "run_check: criterion must not be null");
   assert(context != null, "run_check: context must not be null");
   const type = criterion.type ?? "code";
@@ -379,7 +311,7 @@ async function run_check(criterion: Criterion, context: GradeContext): Promise<C
  * score passes through, so no checker has to guard against float drift
  * pushing `earned` past `points`.
  */
-function score_item(criterion: Criterion, result: CheckResult): GradedItem {
+function score_item(criterion, result) {
   assert(criterion != null, "score_item: criterion must not be null");
   assert(
     result != null && typeof result === "object",
@@ -415,28 +347,25 @@ function score_item(criterion: Criterion, result: CheckResult): GradedItem {
  * A checker that throws costs its criterion zero points and reports the error
  * in the row, so one broken criterion cannot take down the whole run.
  */
-export async function grade(
-  criteria: Criterion[],
-  context: GradeContext,
-): Promise<GradeReport> {
+export async function grade(criteria, context) {
   assert_array(criteria, "grade: criteria", CRITERION_COUNT_MAX);
   assert(context != null && typeof context === "object", "grade: context must be an object");
   assert_string(context.source ?? "", "grade: context.source", SOURCE_BYTES_MAX);
-  const results = assert_array<RunResult>(
+  const results = assert_array(
     context.results ?? [], "grade: context.results", TEST_CASE_COUNT_MAX,
   );
 
-  const full_context: GradeContext = {
+  const full_context = {
     ...context,
     combined_output: context.combined_output ??
       results.map((result) => result.out ?? "").join("\n"),
   };
 
-  const items: GradedItem[] = [];
+  const items = [];
   for (let index = 0; index < criteria.length; index++) {
     const criterion = criteria[index];
     check_criterion(criterion, index);
-    let result: CheckResult;
+    let result;
     try {
       result = await run_check(criterion, full_context);
     } catch (error) {

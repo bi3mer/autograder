@@ -1,4 +1,4 @@
-import { assert } from "./assert.ts";
+import { assert } from "./assert.js";
 
 /** Characters that would otherwise open a tag or an entity. */
 const ESCAPES = { "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" };
@@ -8,10 +8,10 @@ const ESCAPES = { "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&
  * submission containing `<script>` must render as text rather than run.
  * Quotes are escaped too, so the same function is safe inside an attribute.
  */
-export function escape_html(value: unknown): string {
+export function escape_html(value) {
   const text = String(value);
   const escaped = text.replace(/[&<>"']/g, (character) => (
-    ESCAPES[character as keyof typeof ESCAPES]
+    ESCAPES[character]
   ));
   assert(escaped.length >= text.length, "escape_html: escaping never shortens text");
   assert(!/[<>]/.test(escaped), "escape_html: no raw angle brackets may survive");

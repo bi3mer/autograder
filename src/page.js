@@ -11,64 +11,44 @@
  * only renders when the elements are absent.
  */
 
-import { assert, assert_string } from "./assert.ts";
-import { NEEDLE_CHARS_MAX } from "./constants.ts";
-import type { ElementIds } from "./grader.ts";
-import { escape_html } from "./html.ts";
+import { assert, assert_string } from "./assert.js";
+import { NEEDLE_CHARS_MAX } from "./constants.js";
+import { escape_html } from "./html.js";
 
-export type { ElementIds };
-
-export interface SkeletonOptions {
-  ids: ElementIds;
-  /** Heading text. */
-  title: string;
-  subtitle?: string;
-  /** Caption under the score, e.g. `"/ 45 auto"`. */
-  headline_label?: string;
-  /** Bold line in the drop zone. */
-  drop_prompt?: string;
-  /** Small line under the drop prompt. */
-  drop_hint?: string;
-  /** `accept` attribute for the file input. */
-  accept?: string;
-  /** Omitted when absent. */
-  footer?: string;
-  mount: HTMLElement;
-}
+/**
+ * `render_skeleton` takes one options object: `ids` (the element ids the
+ * grader wires up), `mount` (the element the sheet is appended to), `title`
+ * (the heading), and the optional `subtitle`, `headline_label` (the caption
+ * under the score, e.g. `"/ 45 auto"`), `drop_prompt` (the bold line in the
+ * drop zone), `drop_hint` (the small line under it), `accept` (the file
+ * input's `accept` attribute), and `footer`, which is omitted when absent.
+ */
 
 const DROP_HINT_DEFAULT = "or click to choose a file · runs entirely in your browser";
 
 /**
- * URL of the script tag that loaded this bundle, or `""` when unknown.
- *
- * Read at module evaluation, which for the IIFE bundle is while its own
- * `<script>` is executing, so `currentScript` is that tag. It is the anchor
- * for finding `css/a1.css` next to `dist/`, which is what lets a page skip
- * the stylesheet link. Module builds report `null` here, so an ES module
- * consumer passes `styles_href` explicitly or links the stylesheet itself.
+ * This module's own URL, which is the anchor for finding `css/a1.css` beside
+ * `src/`, and what lets an assignment page skip the stylesheet link. The
+ * browser resolves `import.meta.url` for a module the same way whether the
+ * page loaded it directly or another module imported it.
  */
-const BUNDLE_SRC = typeof document !== "undefined" &&
-  document.currentScript instanceof HTMLScriptElement
-  ? document.currentScript.src
-  : "";
+const MODULE_SRC = import.meta.url;
 
-/** `""` when the bundle's own location is unknown. */
-export function default_styles_href(): string {
-  if (BUNDLE_SRC === "") return "";
-  const href = new URL("../css/a1.css", BUNDLE_SRC).href;
+/** The stylesheet that ships with the grader, as an absolute URL. */
+export function default_styles_href() {
+  const href = new URL("../css/a1.css", MODULE_SRC).href;
   assert(href.endsWith("a1.css"), "default_styles_href: must resolve to the stylesheet");
   return href;
 }
 
 /** Adds nothing when the page already loads that same file, or when `href` is `""`. */
-export function ensure_stylesheet(href: string): boolean {
+export function ensure_stylesheet(href) {
   assert(typeof href === "string", "ensure_stylesheet: href must be a string");
   if (href === "") return false;
   const absolute = new URL(href, document.baseURI).href;
   const links = document.querySelectorAll('link[rel="stylesheet"]');
   for (let index = 0; index < links.length; index++) {
-    const link = links[index] as HTMLLinkElement;
-    if (link.href === absolute) return false;
+    if (links[index].href === absolute) return false;
   }
   const link = document.createElement("link");
   link.rel = "stylesheet";
@@ -79,7 +59,7 @@ export function ensure_stylesheet(href: string): boolean {
   return true;
 }
 
-function header_html(options: SkeletonOptions): string {
+function header_html(options) {
   assert_string(options.title, "page: title", NEEDLE_CHARS_MAX);
   assert(options.title.length > 0, "page: title must not be empty");
   const subtitle = options.subtitle
@@ -99,7 +79,7 @@ function header_html(options: SkeletonOptions): string {
     </header>`;
 }
 
-function body_html(options: SkeletonOptions): string {
+function body_html(options) {
   const { ids } = options;
   const prompt = options.drop_prompt ?? "Drop your submission here";
   const hint = options.drop_hint ?? DROP_HINT_DEFAULT;
@@ -138,7 +118,7 @@ function body_html(options: SkeletonOptions): string {
  * The markup is appended rather than assigned, so a page may put its own
  * content (a course banner, a link back to the syllabus) around the grader.
  */
-export function render_skeleton(options: SkeletonOptions): void {
+export function render_skeleton(options) {
   assert(
     options != null && typeof options === "object",
     "render_skeleton: options must be an object",

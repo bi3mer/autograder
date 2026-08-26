@@ -7,17 +7,15 @@
  * Nothing here knows about any specific assignment.
  */
 
-import { assert, assert_array, assert_range, assert_string } from "./assert.ts";
-import { escape_html } from "./html.ts";
+import { assert, assert_array, assert_range, assert_string } from "./assert.js";
+import { escape_html } from "./html.js";
 import {
   default_styles_href,
   ensure_stylesheet,
   render_skeleton,
-} from "./page.ts";
-import * as py_runner from "./pyrunner.ts";
-import type { RunResult } from "./pyrunner.ts";
-import * as rubric from "./rubric.ts";
-import type { Criterion, GradeReport, GradedItem } from "./rubric.ts";
+} from "./page.js";
+import * as py_runner from "./pyrunner.js";
+import * as rubric from "./rubric.js";
 import {
   CRITERION_COUNT_MAX,
   FILENAME_CHARS_MAX,
@@ -27,129 +25,40 @@ import {
   SOURCE_BYTES_MAX,
   STDIN_LINE_COUNT_MAX,
   TEST_CASE_COUNT_MAX,
-} from "./constants.ts";
-
-export interface TestCase {
-  name: string;
-  /** Values fed to successive `input()` calls. */
-  stdin_lines: string[];
-  /** Required output, one entry per line. */
-  expected_lines: string[];
-}
+} from "./constants.js";
 
 /**
- * A rubric line the tool cannot check, shown for completeness and excluded
- * from the automatic total (variable naming, comment quality, and the like).
+ * `init` takes one config object:
+ *
+ * - `filename`: the submission's name, e.g. `"program1.py"`. Names the file
+ *   inside Pyodide (so tracebacks read `program1.py`), heads the copyable
+ *   summary, and fills the default drop prompt. The upload itself is only
+ *   checked for a `.py` extension, not for this exact name.
+ * - `cases`: `{ name, stdin_lines, expected_lines }` per example, run in
+ *   order. `cases[0].stdin_lines` also drives the syntax-error probe that
+ *   gates the whole run.
+ * - `build_criteria(results)`: returns the rubric `rubric.grade` scores.
+ * - `max_auto_points`: the denominator shown beside the total.
+ * - `manual_rows`: instructor-graded rows, not totalled, each
+ *   `{ name, description, score, detail }` where `score` is text like
+ *   `"manual / 5"`.
+ * - `title`, `subtitle`, `headline_label`, `drop_prompt`, `drop_hint`,
+ *   `accept`, `footer`: page text, each with a default (the title falls back
+ *   to `document.title`, the caption to `"/ <max_auto_points> auto"`, and the
+ *   prompt to `"Drop <filename> here"`).
+ * - `mount`: an element or a selector, defaulting to `document.body`.
+ * - `styles_href`: another stylesheet, or `false` to link none. Defaults to
+ *   `css/a1.css` beside this module.
+ * - `element_ids`: overrides for any of `ELEMENT_IDS_DEFAULT`.
+ * - `submit_to`: where the student uploads the file, named in the
+ *   non-Python-file warning. Defaults to `"BrightSpace"`.
+ *
+ * A rubric row rendered from all that is `{ mark, state, name, description,
+ * score, detail }`: the mark is `✓`, `±`, `✗`, or `—`, and the state is
+ * `"pass"`, `"fail"`, or `"pending"`, which is the mark's CSS class.
  */
-export interface ManualRow {
-  name: string;
-  description: string;
-  /** Text shown in the score column, e.g. `"manual / 5"`. */
-  score: string;
-  detail?: string;
-}
 
-export interface RubricRow {
-  /** Glyph in the left column: `✓`, `±`, `✗`, or `—`. */
-  mark: string;
-  /** CSS state class for the mark. */
-  state: "pass" | "fail" | "pending";
-  name: string;
-  description: string;
-  score: string;
-  /** Already HTML-escaped where needed. */
-  detail?: string;
-}
-
-export type BuildCriteria = (results: RunResult[]) => Criterion[];
-
-export interface GraderConfig {
-  /**
-   * Submission filename, e.g. `"program1.py"`. Names the file inside Pyodide
-   * (so tracebacks read `program1.py`), heads the copyable summary, and fills
-   * the default drop prompt. The upload itself is only checked for a `.py`
-   * extension, not for this exact name.
-   */
-  filename: string;
-  /**
-   * Run in order. `cases[0].stdin_lines` also drives the syntax-error probe
-   * that gates the whole run.
-   */
-  cases: TestCase[];
-  build_criteria: BuildCriteria;
-  /** Denominator shown beside the total. */
-  max_auto_points: number;
-  /** Instructor-graded rows, not totalled. */
-  manual_rows?: ManualRow[];
-  element_ids?: Partial<ElementIds>;
-  /** Defaults to `document.title`. */
-  title?: string;
-  /** Line under the heading, e.g. the rubric total. */
-  subtitle?: string;
-  /** Defaults to `"/ <max_auto_points> auto"`. */
-  headline_label?: string;
-  /** Defaults to `"Drop <filename> here"`. */
-  drop_prompt?: string;
-  drop_hint?: string;
-  accept?: string;
-  footer?: string;
-  /** Element or selector; defaults to `document.body`. */
-  mount?: HTMLElement | string;
-  /** `false` adds none. Defaults to `css/a1.css` beside the loaded bundle. */
-  styles_href?: string | false;
-  /**
-   * Where the student uploads the file, named in the non-Python-file warning.
-   * Defaults to `"BrightSpace"`.
-   */
-  submit_to?: string;
-}
-
-export interface ElementIds {
-  status: string;
-  run: string;
-  drop: string;
-  file: string;
-  filename: string;
-  rubric: string;
-  zero: string;
-  headline: string;
-  summary_box: string;
-  summary: string;
-  copy: string;
-  copy_status: string;
-}
-
-export interface Elements {
-  status: HTMLElement;
-  run: HTMLButtonElement;
-  drop: HTMLElement;
-  file: HTMLInputElement;
-  filename: HTMLElement;
-  rubric: HTMLElement;
-  zero: HTMLElement;
-  headline: HTMLElement;
-  summary_box: HTMLElement;
-  summary: HTMLTextAreaElement;
-  copy: HTMLElement;
-  copy_status: HTMLElement;
-}
-
-/**
- * Everything one wired-up page owns. Passing this explicitly, rather than
- * closing over a pile of `let`s, keeps every handler a top-level function
- * small enough to read in one screen.
- */
-export interface GraderSession {
-  config: GraderConfig;
-  elements: Elements;
-  manual_rows: ManualRow[];
-  /** `null` until a submission is chosen. */
-  source: string | null;
-  /** True while a run is in flight, to reject re-entry. */
-  grading: boolean;
-}
-
-const ELEMENT_IDS_DEFAULT: ElementIds = {
+const ELEMENT_IDS_DEFAULT = {
   status: "status",
   run: "run",
   drop: "drop",
@@ -170,7 +79,7 @@ const SYNTAX_ZERO_MESSAGE =
 /** Prefix `py_runner` puts on a compile failure. */
 const SYNTAX_PREFIX = "SYNTAX:";
 
-function reason_for(error: unknown): string {
+function reason_for(error) {
   const reason = error instanceof Error ? error.message : String(error);
   assert(typeof reason === "string", "reason_for: reason must be a string");
   return reason;
@@ -180,7 +89,7 @@ function reason_for(error: unknown): string {
  * A missing id is a page bug, not a student problem, and it is far cheaper to
  * catch here than as a `null` dereference three callbacks later.
  */
-function require_element(id: string): HTMLElement {
+function require_element(id) {
   assert(
     typeof id === "string" && id.length > 0,
     "require_element: id must be non-empty",
@@ -190,22 +99,22 @@ function require_element(id: string): HTMLElement {
   return element;
 }
 
-function resolve_elements(ids: ElementIds): Elements {
+function resolve_elements(ids) {
   assert(
     ids != null && typeof ids === "object",
     "resolve_elements: ids must be an object",
   );
-  const elements: Elements = {
+  const elements = {
     status: require_element(ids.status),
-    run: require_element(ids.run) as HTMLButtonElement,
+    run: require_element(ids.run),
     drop: require_element(ids.drop),
-    file: require_element(ids.file) as HTMLInputElement,
+    file: require_element(ids.file),
     filename: require_element(ids.filename),
     rubric: require_element(ids.rubric),
     zero: require_element(ids.zero),
     headline: require_element(ids.headline),
     summary_box: require_element(ids.summary_box),
-    summary: require_element(ids.summary) as HTMLTextAreaElement,
+    summary: require_element(ids.summary),
     copy: require_element(ids.copy),
     copy_status: require_element(ids.copy_status),
   };
@@ -216,18 +125,14 @@ function resolve_elements(ids: ElementIds): Elements {
   return elements;
 }
 
-function check_config(config: GraderConfig): void {
+function check_config(config) {
   assert(
     config != null && typeof config === "object",
     "init: config must be an object",
   );
   assert_string(config.filename, "config.filename", FILENAME_CHARS_MAX);
   assert(config.filename.length > 0, "config.filename must not be empty");
-  const cases = assert_array<TestCase>(
-    config.cases,
-    "config.cases",
-    TEST_CASE_COUNT_MAX,
-  );
+  const cases = assert_array(config.cases, "config.cases", TEST_CASE_COUNT_MAX);
   assert(cases.length > 0, "config.cases must contain at least one case");
   for (let index = 0; index < cases.length; index++) {
     const test_case = cases[index];
@@ -259,7 +164,7 @@ function check_config(config: GraderConfig): void {
   );
 }
 
-function row_html(row: RubricRow): string {
+function row_html(row) {
   assert(row != null, "row_html: row must not be null");
   assert(
     row.state === "pass" || row.state === "fail" || row.state === "pending",
@@ -280,7 +185,7 @@ function row_html(row: RubricRow): string {
       </div>`;
 }
 
-function row_for_item(item: GradedItem): RubricRow {
+function row_for_item(item) {
   assert(item != null, "row_for_item: item must not be null");
   assert(
     item.earned <= item.points,
@@ -298,7 +203,7 @@ function row_for_item(item: GradedItem): RubricRow {
 }
 
 /** The gate row: a syntax error forces a total score of zero. */
-function row_for_syntax(probe: RunResult): RubricRow {
+function row_for_syntax(probe) {
   assert(probe != null, "row_for_syntax: probe must not be null");
   const failed = probe.err.startsWith(SYNTAX_PREFIX);
   const message = escape_html(probe.err.slice(SYNTAX_PREFIX.length));
@@ -312,15 +217,11 @@ function row_for_syntax(probe: RunResult): RubricRow {
   };
 }
 
-interface SummaryArgs {
-  filename: string;
-  total_points: number;
-  max_auto_points: number;
-  has_syntax_error: boolean;
-}
-
-/** The plain-text summary a student pastes into their submission. */
-function summary_text(args: SummaryArgs, rows: RubricRow[]): string {
+/**
+ * The plain-text summary a student pastes into their submission. `args` is
+ * `{ filename, total_points, max_auto_points, has_syntax_error }`.
+ */
+function summary_text(args, rows) {
   assert(args != null, "summary_text: args must not be null");
   assert(Array.isArray(rows), "summary_text: rows must be an array");
   const lines = [`${args.filename} — Autograder Summary`];
@@ -340,7 +241,7 @@ function summary_text(args: SummaryArgs, rows: RubricRow[]): string {
   return lines.join("\n");
 }
 
-function read_file_text(file: File): Promise<string> {
+function read_file_text(file) {
   assert(file != null, "read_file_text: file must not be null");
   assert(
     typeof file.name === "string",
@@ -355,7 +256,7 @@ function read_file_text(file: File): Promise<string> {
   });
 }
 
-function reset_output(session: GraderSession): void {
+function reset_output(session) {
   assert(session != null, "reset_output: session must not be null");
   const { elements } = session;
   elements.rubric.innerHTML = "";
@@ -373,10 +274,7 @@ function reset_output(session: GraderSession): void {
  * A file the browser cannot read, or one too large to be a Python program,
  * leaves the previous submission in place and says why on the status line.
  */
-async function accept_file(
-  session: GraderSession,
-  file: File | null | undefined,
-): Promise<void> {
+async function accept_file(session, file) {
   assert(session != null, "accept_file: session must not be null");
   if (file == null) return;
   const { config, elements } = session;
@@ -406,12 +304,12 @@ async function accept_file(
   elements.status.textContent = "File loaded. Ready to grade.";
 }
 
-async function score_submission(session: GraderSession): Promise<GradeReport> {
+async function score_submission(session) {
   assert(session.source != null, "score_submission: no submission loaded");
   const { config } = session;
   const source = session.source;
 
-  const results: RunResult[] = [];
+  const results = [];
   for (let index = 0; index < config.cases.length; index++) {
     const stdin_lines = config.cases[index].stdin_lines;
     results.push(
@@ -433,7 +331,7 @@ async function score_submission(session: GraderSession): Promise<GradeReport> {
  * syntax probe gates everything: there is no point diffing the output of a
  * program that never ran.
  */
-async function grade_submission(session: GraderSession): Promise<void> {
+async function grade_submission(session) {
   assert(session.source != null, "grade_submission: no submission loaded");
   assert(py_runner.is_ready(), "grade_submission: Python runtime is not ready");
   const { config, elements } = session;
@@ -447,7 +345,7 @@ async function grade_submission(session: GraderSession): Promise<void> {
     },
   );
   const has_syntax_error = probe.err.startsWith(SYNTAX_PREFIX);
-  const rows: RubricRow[] = [row_for_syntax(probe)];
+  const rows = [row_for_syntax(probe)];
 
   let total_points = 0;
   if (has_syntax_error) {
@@ -483,7 +381,7 @@ async function grade_submission(session: GraderSession): Promise<void> {
  * Falls back to the legacy selection copy, because a browser may refuse the
  * async clipboard on a page opened over `file://`.
  */
-async function copy_summary(session: GraderSession): Promise<void> {
+async function copy_summary(session) {
   assert(session != null, "copy_summary: session must not be null");
   const { elements } = session;
   const text = elements.summary.value;
@@ -500,13 +398,13 @@ async function copy_summary(session: GraderSession): Promise<void> {
   }
 }
 
-function wire_file_input(session: GraderSession): void {
+function wire_file_input(session) {
   assert(session != null, "wire_file_input: session must not be null");
   const { elements } = session;
 
   elements.drop.addEventListener("click", () => elements.file.click());
   elements.file.addEventListener("change", (event) => {
-    const input = event.target as HTMLInputElement;
+    const input = event.target;
     void accept_file(session, input.files?.[0]);
   });
   for (const event_name of ["dragenter", "dragover"]) {
@@ -522,12 +420,12 @@ function wire_file_input(session: GraderSession): void {
     });
   }
   elements.drop.addEventListener("drop", (event) => {
-    const transfer = (event as DragEvent).dataTransfer;
+    const transfer = event.dataTransfer;
     void accept_file(session, transfer?.files[0]);
   });
 }
 
-function wire_buttons(session: GraderSession): void {
+function wire_buttons(session) {
   assert(session != null, "wire_buttons: session must not be null");
   const { elements } = session;
 
@@ -554,7 +452,7 @@ function wire_buttons(session: GraderSession): void {
   elements.copy.addEventListener("click", () => void copy_summary(session));
 }
 
-async function boot(session: GraderSession): Promise<void> {
+async function boot(session) {
   assert(session != null, "boot: session must not be null");
   const { elements } = session;
   try {
@@ -570,7 +468,7 @@ async function boot(session: GraderSession): Promise<void> {
   elements.run.disabled = session.source == null;
 }
 
-function resolve_mount(mount: HTMLElement | string | undefined): HTMLElement {
+function resolve_mount(mount) {
   if (mount == null) return document.body;
   if (typeof mount === "string") {
     const found = document.querySelector(mount);
@@ -578,7 +476,7 @@ function resolve_mount(mount: HTMLElement | string | undefined): HTMLElement {
       found != null,
       `init: no element matches the mount selector "${mount}"`,
     );
-    return found as HTMLElement;
+    return found;
   }
   assert(
     mount instanceof HTMLElement,
@@ -592,7 +490,7 @@ function resolve_mount(mount: HTMLElement | string | undefined): HTMLElement {
  * elements keeps them, and everything else gets the generated skeleton, so an
  * assignment page is a title, a stylesheet, and its data.
  */
-function ensure_page(config: GraderConfig, ids: ElementIds): boolean {
+function ensure_page(config, ids) {
   assert(config != null, "ensure_page: config must not be null");
   assert(ids != null, "ensure_page: ids must not be null");
   if (document.getElementById(ids.run) != null) return false;
@@ -622,14 +520,19 @@ function ensure_page(config: GraderConfig, ids: ElementIds): boolean {
  * Wire up a browser autograder page. The page needs no markup of its own:
  * when the grader elements are absent, this renders the skeleton first.
  */
-export function init(config: GraderConfig): void {
+export function init(config) {
   check_config(config);
-  const ids: ElementIds = {
+  const ids = {
     ...ELEMENT_IDS_DEFAULT,
     ...(config.element_ids ?? {}),
   };
   ensure_page(config, ids);
-  const session: GraderSession = {
+  // Everything one wired-up page owns. Passing this session explicitly,
+  // rather than closing over a pile of `let`s, keeps every handler a
+  // top-level function small enough to read in one screen. `source` is null
+  // until a submission is chosen, and `grading` rejects re-entry while a run
+  // is in flight.
+  const session = {
     config,
     elements: resolve_elements(ids),
     manual_rows: config.manual_rows ?? [],

@@ -7,46 +7,27 @@
  * scored criteria.
  */
 
-import { assert, assert_array, assert_string } from "./assert.ts";
+import { assert, assert_array, assert_string } from "./assert.js";
 import {
   LINE_ABSENT, LINE_COUNT_MAX, NEEDLE_ALTERNATIVE_COUNT_MAX, NEEDLE_CHARS_MAX,
   NEEDLE_COUNT_MAX, OUTPUT_BYTES_MAX,
-} from "./constants.ts";
+} from "./constants.js";
 
 /**
- * A literal substring, or a list of alternative spellings of the same thing
- * where matching any one counts as a match: `['input("x: ")', "input('x: ')"]`
- * accepts either quote style.
+ * The shapes this module passes around, all plain objects:
+ *
+ * - A needle is a literal substring, or a list of alternative spellings of
+ *   the same thing where matching any one counts: `['input("x: ")',
+ *   "input('x: ')"]` accepts either quote style.
+ * - Match options carry one flag, `case_sensitive` (true by default);
+ *   `contains_set` also takes `mode`, `"all"` or `"any"`.
+ * - `contains_set` returns `{ pass, matched, missing }`, where `matched` and
+ *   `missing` hold the labels of the needles found and absent.
+ * - `diff_lines` returns `{ all_match, rows }`, one row per aligned line pair:
+ *   `{ got, expected, ok }`, with `LINE_ABSENT` on whichever side ran out.
  */
-export type Needle = string | string[];
 
-export interface MatchOptions {
-  case_sensitive?: boolean;
-}
-
-export interface ContainsSetResult {
-  pass: boolean;
-  /** Labels of the needles that were found. */
-  matched: string[];
-  /** Labels of the needles that were absent. */
-  missing: string[];
-}
-
-export interface DiffRow {
-  /** Line produced by the submission, or `LINE_ABSENT` if it ran out. */
-  got: string;
-  /** Line the assignment requires, or `LINE_ABSENT` if it ran out. */
-  expected: string;
-  ok: boolean;
-}
-
-export interface DiffResult {
-  /** Every row matched and the line counts agree. */
-  all_match: boolean;
-  rows: DiffRow[];
-}
-
-function normalize(text: string, case_sensitive: boolean): string {
+function normalize(text, case_sensitive) {
   assert(typeof text === "string", "normalize: text must be a string");
   assert(typeof case_sensitive === "boolean", "normalize: case_sensitive must be a boolean");
   return case_sensitive ? text : text.toLowerCase();
@@ -56,7 +37,7 @@ function normalize(text: string, case_sensitive: boolean): string {
  * Carriage returns are dropped so a CRLF submission diffs the same as an LF
  * one; students on Windows should not lose points to their editor.
  */
-function split_lines(text: string, name: string): string[] {
+function split_lines(text, name) {
   assert_string(text, name, OUTPUT_BYTES_MAX);
   assert(typeof name === "string" && name.length > 0, "split_lines: name must be non-empty");
   const lines = text.replace(/\r/g, "").split("\n");
@@ -68,10 +49,7 @@ function split_lines(text: string, name: string): string[] {
 }
 
 /** The label is what the student sees: alternatives joined by `|`. */
-function expand_needle(
-  needle: Needle | undefined,
-  index: number,
-): { alternatives: string[], label: string } {
+function expand_needle(needle, index) {
   assert(
     Number.isInteger(index) && index >= 0,
     "expand_needle: index must be a non-negative integer",
@@ -88,7 +66,7 @@ function expand_needle(
   return { alternatives, label };
 }
 
-export function contains(text: string, needle: string, options: MatchOptions = {}): boolean {
+export function contains(text, needle, options = {}) {
   assert_string(text, "contains: text", OUTPUT_BYTES_MAX);
   assert_string(needle, "contains: needle", NEEDLE_CHARS_MAX);
   assert(options != null && typeof options === "object", "contains: options must be an object");
@@ -101,11 +79,7 @@ export function contains(text: string, needle: string, options: MatchOptions = {
  * Both modes report the full matched/missing split either way, so the caller
  * can show the student exactly which needles are missing.
  */
-export function contains_set(
-  text: string,
-  needles: Needle[],
-  options: MatchOptions & { mode?: "all" | "any" } = {},
-): ContainsSetResult {
+export function contains_set(text, needles, options = {}) {
   assert_string(text, "contains_set: text", OUTPUT_BYTES_MAX);
   assert_array(needles, "contains_set: needles", NEEDLE_COUNT_MAX);
   assert(
@@ -120,8 +94,8 @@ export function contains_set(
   const case_sensitive = options.case_sensitive !== false;
 
   const haystack = normalize(text, case_sensitive);
-  const matched: string[] = [];
-  const missing: string[] = [];
+  const matched = [];
+  const missing = [];
   for (let index = 0; index < needles.length; index++) {
     const { alternatives, label } = expand_needle(needles[index], index);
     let found = false;
@@ -144,7 +118,7 @@ export function contains_set(
  * required or forbidden substring sits is what turns "missing a prompt" into
  * "line 12 is the wrong prompt".
  */
-export function find_lines(text: string, needle: string, options: MatchOptions = {}): number[] {
+export function find_lines(text, needle, options = {}) {
   assert_string(text, "find_lines: text", OUTPUT_BYTES_MAX);
   assert_string(needle, "find_lines: needle", NEEDLE_CHARS_MAX);
   assert(options != null && typeof options === "object", "find_lines: options must be an object");
@@ -152,7 +126,7 @@ export function find_lines(text: string, needle: string, options: MatchOptions =
 
   const target = normalize(needle, case_sensitive);
   const lines = split_lines(normalize(text, case_sensitive), "find_lines: text");
-  const line_numbers: number[] = [];
+  const line_numbers = [];
   for (let index = 0; index < lines.length; index++) {
     if (lines[index].includes(target)) line_numbers.push(index + 1);
   }
@@ -168,7 +142,7 @@ export function find_lines(text: string, needle: string, options: MatchOptions =
  * first real output line ("Habit Costs for") lets the diff compare program
  * output against program output.
  */
-function trim_to_anchor(lines: string[], anchor_prefix?: string): string[] {
+function trim_to_anchor(lines, anchor_prefix) {
   assert(Array.isArray(lines), "trim_to_anchor: lines must be an array");
   assert(lines.length <= LINE_COUNT_MAX, `trim_to_anchor: lines exceeds ${LINE_COUNT_MAX}`);
   let end = lines.length;
@@ -187,11 +161,7 @@ function trim_to_anchor(lines: string[], anchor_prefix?: string): string[] {
  * Rows are aligned by index, with `LINE_ABSENT` standing in on whichever side
  * ran out of lines first.
  */
-export function diff_lines(
-  text: string,
-  expected_lines: string[],
-  options: { anchor_prefix?: string } = {},
-): DiffResult {
+export function diff_lines(text, expected_lines, options = {}) {
   assert_string(text ?? "", "diff_lines: text", OUTPUT_BYTES_MAX);
   assert_array(expected_lines, "diff_lines: expected_lines", LINE_COUNT_MAX);
   assert(options != null && typeof options === "object", "diff_lines: options must be an object");
@@ -200,7 +170,7 @@ export function diff_lines(
   const row_count = Math.max(got.length, expected_lines.length);
   assert(row_count <= LINE_COUNT_MAX, `diff_lines: row_count exceeds ${LINE_COUNT_MAX}`);
 
-  const rows: DiffRow[] = [];
+  const rows = [];
   let all_match = got.length === expected_lines.length;
   for (let index = 0; index < row_count; index++) {
     const got_line = got[index] ?? LINE_ABSENT;

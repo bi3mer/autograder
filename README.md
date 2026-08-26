@@ -7,33 +7,39 @@ with flake8, and prints a rubric plus a copy-paste summary. Nothing is
 uploaded: the Python runtime, the student's code, and the grading all live in
 the browser tab.
 
-The site is served by GitHub Pages, built from `src/` by the workflow on every
-push to `main`. `dist/` is gitignored: the deployed bundle always comes from
-the commit that produced it, so a stale bundle cannot ship.
+There is no build step and no dependencies. The browser loads `src/` as ES
+modules, GitHub Pages serves the repository tree as it stands, and the tests
+are plain Node, so what runs in production is the source you are reading.
 
 ## Layout
 
-| Path     | What lives there                                            |
-| -------- | ----------------------------------------------------------- |
-| `src/`   | The grading engine, as TypeScript ES modules                |
-| `dist/`  | Built bundles, gitignored; `npm run build` creates them     |
-| `css/`   | Page styles shared by assignment pages                      |
-| `cs230/` | One HTML page per assignment: test cases and rubric only    |
-| `index.html` | Site root: a placeholder page on the shared dark theme  |
-| `test/`  | Node tests: the grading engine, and the page under jsdom    |
+| Path           | What lives there                                         |
+| -------------- | -------------------------------------------------------- |
+| `src/`         | The grading engine, as plain ES modules                  |
+| `css/`         | Page styles shared by assignment pages                   |
+| `cs230/`       | One HTML page per assignment: test cases and rubric only |
+| `index.html`   | Site root: a placeholder page on the shared dark theme   |
+| `test/`        | One `node --test` file per engine module                 |
+| `package.json` | Three scripts and `"type": "module"`; no dependencies    |
 
-`src/` holds six modules. `assert.ts` provides the assertions, which stay
-enabled in every build. `checks.ts` does substring matching and line diffing
-over plain strings. `pyrunner.ts` loads Pyodide and runs one submission
-against canned stdin. `rubric.ts` scores an array of criterion objects.
-`page.ts` generates the page markup, and `grader.ts` wires everything to the
+`src/main.js` re-exports the whole engine, and eight modules sit behind it.
+`assert.js` provides the assertions, which stay enabled everywhere, and
+`constants.js` holds every limit they check against. `checks.js` does
+substring matching and line diffing over plain strings, and `html.js` escapes
+whatever reaches the page. `pyrunner.js` loads Pyodide and runs one submission
+against canned stdin. `rubric.js` scores an array of criterion objects.
+`page.js` generates the page markup, and `grader.js` wires everything to the
 DOM.
 
-## Using the Bundle in an HTML Page
+Nothing in `src/` imports anything outside `src/`, so a page needs those nine
+files and no package manager.
 
-Two script tags, Pyodide then the bundle, and one call. The bundle defines
-the global `Autograder`, generates the page markup, and loads `css/a1.css`
-from beside itself, so the page carries no boilerplate of its own.
+## Using the Engine in an HTML Page
+
+Pyodide's script tag, then one module script that imports `src/main.js` and
+calls `init` with the assignment's data. The engine generates the page markup
+and loads `css/a1.css` from beside `src/`, so the page carries no boilerplate
+of its own.
 
 ```html
 <!DOCTYPE html>
@@ -42,16 +48,17 @@ from beside itself, so the page carries no boilerplate of its own.
     <meta charset="UTF-8" />
     <title>Habit Cost Autograder</title>
     <script src="https://cdn.jsdelivr.net/pyodide/v0.26.2/full/pyodide.js"></script>
-    <script src="../dist/autograder.js"></script>
   </head>
   <body>
-    <script>
-      Autograder.grader_app.init({
+    <script type="module">
+      import { grader_app } from "../src/main.js";
+
+      grader_app.init({
         filename: "program1.py",
         subtitle: "Assignment 1 · program1.py · 45 auto-graded (of 50 total)",
         footer: "Runs Python via Pyodide. Nothing is uploaded.",
         cases: CASES, // [{ name, stdin_lines, expected_lines }]
-        build_criteria, // (results) => Criterion[]
+        build_criteria, // (results) => criteria
         manual_rows: MANUAL_ROWS, // instructor-graded rows, not totalled
         max_auto_points: 45,
       });
@@ -60,6 +67,9 @@ from beside itself, so the page carries no boilerplate of its own.
 </html>
 ```
 
+Pyodide's tag is a classic script and the page's is a module, so `loadPyodide`
+is defined well before `init` runs: modules are deferred, classic tags are not.
+
 The heading defaults to the document title, the score caption to
 `"/ <max_auto_points> auto"`, and the drop prompt to `"Drop <filename> here"`.
 Override any of them with `title`, `headline_label`, `drop_prompt`,
@@ -67,14 +77,13 @@ Override any of them with `title`, `headline_label`, `drop_prompt`,
 picks a wrongly-named file, `"BrightSpace"` by default). Pass
 `mount: "#somewhere"` to render inside an existing element rather than
 `document.body`, and `styles_href` to point at another stylesheet or `false`
-to link none.
+to link none. The comment above `ELEMENT_IDS_DEFAULT` in `src/grader.js`
+documents every field.
 
-Use `dist/autograder.min.js` for the deployed page and `dist/autograder.js`
-while debugging: both keep assertions live, and both ship a source map.
-`dist/autograder.esm.js` is the same code as an ES module:
+Import one module directly when that is all a page needs:
 
 ```js
-import { grader_app, rubric } from "./dist/autograder.esm.js";
+import { grade } from "../src/rubric.js";
 ```
 
 A page that already contains the grader elements keeps its own markup:
@@ -89,9 +98,9 @@ assertion at startup rather than throwing `null` errors later.
 Copy `cs230/a1.html`, then replace two things: `CASES` (the stdin and expected
 output for each example in the handout) and `build_criteria` (the rubric).
 Everything else is shared, and the page is about a dozen lines around that
-data. Criterion types are `code`, `output`, `code-regex`,
-`output-diff`, `flake8`, and `custom`; see the `Criterion` interface in
-`src/rubric.ts` for every field.
+data. Criterion types are `code`, `output`, `code-regex`, `output-diff`,
+`flake8`, and `custom`; the comment above `round_points` in `src/rubric.js`
+lists every field a criterion takes.
 
 Scoring is proportional wherever partial work deserves partial credit. A
 `code` criterion in the default `all` mode awards points in proportion to how
@@ -102,39 +111,40 @@ point per finding, with a floor of zero.
 ## Development
 
 ```
-npm install
-npm run build       # required first: dist/ is gitignored, so a clone has none
 npm run serve       # http://localhost:8000/cs230/a1.html
-npm run typecheck   # tsc against src/, test/, and the build scripts
-npm test            # 16 engine tests, then 11 DOM tests under jsdom
-npm run docs        # generate docs/api from the types and doc comments
-npm run check       # typecheck, then build
+npm test            # 106 tests, straight from a clone: nothing to install
 ```
 
-Build before serving, and serve over HTTP rather than opening the page
-directly: `dist/` starts empty in a fresh clone, and Pyodide fetches its
-WebAssembly runtime, which a `file://` page cannot do.
+Serve over HTTP rather than opening a page directly: ES modules and Pyodide's
+WebAssembly runtime are both fetched, and a `file://` page cannot do either.
+Any static server works; `npm run serve` is Python's, because Pyodide already
+assumes Python is around.
 
-Node runs the TypeScript directly by stripping the types, so `npm test`,
-`npm run build`, and `npm run site` execute `.ts` files with no compile step
-in between. That needs Node 24 or newer, which `engines` states and CI pins.
-Two settings in `tsconfig.json` keep that working: `allowImportingTsExtensions`,
-because nothing rewrites an import path, so every relative import names the
-`.ts` file it resolves to; and `erasableSyntaxOnly`, so `tsc` rejects syntax
-that type stripping cannot erase (enums, namespaces, parameter properties)
-rather than Node rejecting it at run time.
+`package.json` carries the three scripts and `"type": "module"`, which is
+what makes Node read `src/*.js` as ES modules. A browser decides that from
+the `type="module"` attribute on the script tag instead, so it never reads
+the manifest at all. There are no dependencies and no lockfile, so there is
+no install step: `npm test` runs on a fresh clone.
 
-Types live in the source rather than in a `.d.ts`, and `tsc --noEmit` is the
-only thing that reads them: esbuild strips them when it bundles, so `dist/`
-is plain JavaScript and the browser never sees TypeScript.
+The tests run on Node's own test runner, one file per module: `test_checks.js`
+covers `src/checks.js`, `test_rubric.js` covers `src/rubric.js`, and so on.
+`test_pyrunner.js` drives the runner against a fake interpreter that records
+the Python it is handed, which covers the encoding and the state guards
+without WebAssembly.
+
+The tests cover the grading engine, which is where a wrong score comes from.
+They do not cover the DOM: a test double for the browser is a second
+implementation to trust, and jsdom is a large dependency to carry for it. The
+generated page is checked by loading it. Serve the site and drop a `.py` file
+on `cs230/a1.html`; a missing element fails an assertion at startup, in front
+of you, rather than silently.
 
 ## Deploying
 
-Pushing to `main` triggers `.github/workflows/pages.yml`, which typechecks,
-tests, builds `dist/`, generates the docs, assembles `_site/`, and deploys it
-to GitHub Pages. `_site/` holds `index.html`, `cs230/`, `css/`, `dist/`, and
-`docs/`: uploading the checkout itself would publish `node_modules/` and the
-tests along with them. Nothing deploys unless the typecheck and the tests pass.
+Pushing to `main` triggers `.github/workflows/pages.yml`, which runs the tests
+and then uploads the checkout to GitHub Pages. No install step, no build step,
+and no assembly step: the repository tree is the site. Nothing deploys unless
+the tests pass.
 
 This requires the repository's Pages source to be GitHub Actions rather than a
 branch. The repository is on branch mode today, so flip it once:
@@ -144,7 +154,7 @@ gh api -X PUT repos/bi3mer/autograder/pages -f build_type=workflow
 ```
 
 To catch a failure before the push rather than in CI, install the pre-push
-hook, which runs the same typecheck and tests locally:
+hook, which runs the same tests locally:
 
 ```
 npm run hooks:install
@@ -152,24 +162,25 @@ npm run hooks:install
 
 ## Code Style
 
-The TypeScript follows [TIGER_STYLE](https://github.com/tigerbeetle/tigerbeetle/blob/main/docs/TIGER_STYLE.md),
+The JavaScript follows [TIGER_STYLE](https://github.com/tigerbeetle/tigerbeetle/blob/main/docs/TIGER_STYLE.md),
 including `snake_case` identifiers. In practice that means five habits:
 
-Assertions are everywhere and stay enabled in production builds, including the
-minified one. Every function asserts its arguments and its postconditions. A
-grader that throws loudly in front of one instructor costs less than a grader
-that quietly awards the wrong score to two hundred students.
+Assertions are everywhere and stay enabled in production. Every function
+asserts its arguments and its postconditions. A grader that throws loudly in
+front of one instructor costs less than a grader that quietly awards the wrong
+score to two hundred students.
 
-Every limit is explicit and lives in `src/constants.ts`, so every loop runs
+Every limit is explicit and lives in `src/constants.js`, so every loop runs
 against a stated bound. A pasted binary or a runaway `while True` print loop
 fails an assertion at the boundary instead of hanging the tab.
 
 Functions stay under 70 lines and do one thing. Names carry their units and
 avoid abbreviation: `max_line_length_chars`, not `maxLen`.
 
-Comments explain why, never what. The signature already states the types and
-the name already states the intent, so a comment earns its place only by
-saying something neither can: why the regex `lastIndex` is reset between
+Comments explain why, never what, with one exception: because there are no
+type declarations, a module documents the shape of the objects it hands
+around in one comment block near the top. Everything else earns its place by
+saying something the code cannot: why the regex `lastIndex` is reset between
 submissions, why flake8's structured results are read instead of its
 formatter, why points round once at the end rather than per case.
 

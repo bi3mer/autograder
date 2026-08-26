@@ -1,4 +1,4 @@
-name: Build and deploy to GitHub Pages
+name: Test and deploy to GitHub Pages
 
 on:
   push:
@@ -17,7 +17,7 @@ concurrency:
   cancel-in-progress: false
 
 jobs:
-  build:
+  test:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
@@ -25,34 +25,24 @@ jobs:
       - uses: actions/setup-node@v4
         with:
           node-version: 24
-          cache: npm
 
-      - run: npm ci
-
-      - name: Typecheck
-        run: npm run typecheck
-
-      # dist/ is gitignored. This build is what Pages actually serves, so the
-      # deployed bundle is always the one built from this commit's src/.
-      - name: Build the bundle
-        run: npm run build
-
-      - name: Run the smoke tests
+      # The tests have no dependencies, so there is nothing to install.
+      - name: Run the tests
         run: npm test
 
-      - name: Generate the API docs
-        run: npm run docs
-
-      # Assemble exactly what the site needs. Uploading the checkout itself
-      # would ship node_modules, src/, and the tests along with it.
-      - name: Assemble the site
-        run: npm run site
+  # The browser loads src/ directly, so the site is the repository tree and
+  # the upload needs no build of any kind.
+  build:
+    needs: test
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
 
       - uses: actions/configure-pages@v5
 
       - uses: actions/upload-pages-artifact@v3
         with:
-          path: _site
+          path: .
 
   deploy:
     needs: build

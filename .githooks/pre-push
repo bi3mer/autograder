@@ -1,11 +1,8 @@
 #!/usr/bin/env bash
-# Typecheck and test before every push, so a broken grader never reaches the
-# Pages workflow. `npm test` builds dist/ first (see the pretest script): one
-# of the smoke tests loads the bundle and checks that assertions survived
-# minification, and dist/ is gitignored, so a fresh clone has none.
+# Test before every push, so a broken grader never reaches the Pages workflow.
+# Nothing to install first: the tests are plain Node with no dependencies.
 #
 # Install with: npm run hooks:install
 set -euo pipefail
 
-npm run typecheck
 npm test
