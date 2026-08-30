@@ -14,16 +14,23 @@
 import { assert, assert_array, assert_range, assert_string } from "./assert.js";
 import {
   FILENAME_CHARS_MAX, LINE_COUNT_MAX, LINE_LENGTH_CHARS_DEFAULT, LINE_LENGTH_CHARS_MAX,
-  LINT_FILENAME, LINT_FINDING_COUNT_MAX, SOURCE_BYTES_MAX, STDIN_LINE_COUNT_MAX,
-  SUBMISSION_FILENAME_DEFAULT,
+  LINT_FILENAME, LINT_FINDING_COUNT_MAX, OUTPUT_BYTES_MAX, RUN_TIMEOUT_MS,
+  RUN_TIMEOUT_MS_MAX, SOURCE_BYTES_MAX, STDIN_LINE_COUNT_MAX,
+  SUBMISSION_FILENAME_DEFAULT, TRACE_CHECK_INTERVAL_EVENTS,
 } from "./constants.js";
 
 /**
  * The shapes this module hands back, all plain objects:
  *
- * - `run` returns `{ out, err, prompts }`: captured stdout including echoed
- *   input prompts, then `""` or `"SYNTAX:<message>"` or `"RUNTIME:<traceback>"`,
- *   then the prompt strings `input()` was called with, in order.
+ * - `run` returns `{ out, err, prompts, kind, line, col }`: captured stdout
+ *   including echoed input prompts, then `""` or `"SYNTAX:<message>"` or
+ *   `"RUNTIME:<message>"`, then the prompt strings `input()` was called with,
+ *   in order. `kind` names the failure more finely than the two `err` prefixes
+ *   can (`""`, `"syntax"`, `"runtime"`, `"input"`, `"timeout"`, `"output"`),
+ *   and `line` and `col` are where in the submission it happened, or `null`.
+ *   The prefixes stay two-valued because a syntax error is the only one the
+ *   rubric treats differently; `kind` is what an editor reads to put a cursor
+ *   on the offending line.
  * - `init` takes `{ on_status, load_pyodide }` (a progress sink for the page's
  *   status line, and a loader that defaults to the global `loadPyodide` from
  *   Pyodide's own script tag) and returns `{ ready, flake8_ready, flake8_error }`,
@@ -37,6 +44,9 @@ import {
  * `"loading"`, `"ready"`, or `"failed"`.
  */
 let state = "idle";
+
+/** Every `kind` the driver below can report; `run` checks its result against it. */
+const KINDS_ALLOWED = ["", "syntax", "runtime", "input", "timeout", "output"];
 
 /** The Pyodide interpreter, `null` until `init` resolves. */
 let pyodide = null;
@@ -170,37 +180,129 @@ export function flake8_failure_reason() {
  * `input()` is replaced so it writes `prompt + typed value + "\n"` to stdout,
  * which is what a real terminal session looks like. That lets the caller diff
  * a whole transcript and separately inspect which prompts fired.
+ *
+ * Most of the rest exists so a beginner reads their own mistake rather than
+ * this file's internals. `linecache` is primed because a submission compiled
+ * from a string has no file for Python to quote a frame's source line out of.
+ * The traceback is rebuilt from only the frames belonging to the submission,
+ * because the raw one opens with the `exec` call below. Running out of stdin
+ * becomes one sentence instead of a chained `StopIteration` and `EOFError`,
+ * which is the most common way a first attempt fails here. And the watchdog
+ * stops a loop that never ends, which would otherwise freeze the tab: Pyodide
+ * runs on the page's only thread, so there is nothing left to cancel it with.
  */
-function build_run_python(code, stdin_lines, filename) {
+function build_run_python(code, stdin_lines, filename, timeout_ms) {
   assert(typeof code === "string", "build_run_python: code must be a string");
   assert(Array.isArray(stdin_lines), "build_run_python: stdin_lines must be an array");
+  assert_range(timeout_ms, "build_run_python: timeout_ms", 1, RUN_TIMEOUT_MS_MAX);
   return `
-import sys, io, json, builtins, traceback
-_lines = iter(json.loads(${embed(stdin_lines)}))
+import sys, io, json, time, builtins, traceback, linecache
+
+_name = ${JSON.stringify(filename)}
+_src = json.loads(${embed(code)})
+linecache.cache[_name] = (len(_src), None, _src.splitlines(True), _name)
+
+class _OutOfInput(Exception):
+    def __init__(self, asked, have):
+        self.asked = asked
+        self.have = have
+
+class _TookTooLong(Exception):
+    pass
+
+class _TooMuchOutput(Exception):
+    pass
+
+class _BoundedOut(io.StringIO):
+    """Stops a print loop from growing the capture past what can be shipped."""
+    def write(self, text):
+        if self.tell() > ${OUTPUT_BYTES_MAX}:
+            raise _TooMuchOutput()
+        return io.StringIO.write(self, text)
+
+_stdin = json.loads(${embed(stdin_lines)})
+_lines = iter(_stdin)
 _prompts = []
+_asked = [0]
+
 def _fake_input(prompt=""):
+    _asked[0] += 1
     try:
         _val = next(_lines)
     except StopIteration:
-        raise EOFError("no more input")
+        # \`from None\` drops the StopIteration chain: what went wrong is that the
+        # program asked for input nobody supplied, not that an iterator ended.
+        raise _OutOfInput(_asked[0], len(_stdin)) from None
     _prompts.append(prompt)
     sys.stdout.write(prompt + _val + "\\n")
     return _val
+
 builtins.input = _fake_input
-_out = io.StringIO()
+
+# Reading the clock on every line costs more than the check saves, so the
+# counter samples it instead.
+_deadline = time.monotonic() + ${timeout_ms} / 1000.0
+_events = [0]
+
+def _watchdog(frame, event, arg):
+    _events[0] += 1
+    if _events[0] % ${TRACE_CHECK_INTERVAL_EVENTS} == 0 and time.monotonic() > _deadline:
+        raise _TookTooLong()
+    return _watchdog
+
+def _own_frames():
+    return [f for f in traceback.extract_tb(sys.exc_info()[2]) if f.filename == _name]
+
+_out = _BoundedOut()
 _old = sys.stdout
 sys.stdout = _out
 _err = ""
+_kind = ""
+_line = None
+_col = None
 try:
-    _code = compile(json.loads(${embed(code)}), ${JSON.stringify(filename)}, "exec")
-    exec(_code, {"__name__": "__main__"})
-except SyntaxError as e:
-    _err = "SYNTAX:" + str(e)
-except Exception:
-    _err = "RUNTIME:" + traceback.format_exc()
+    _code = compile(_src, _name, "exec")
+    sys.settrace(_watchdog)
+    try:
+        exec(_code, {"__name__": "__main__"})
+    finally:
+        sys.settrace(None)
+except SyntaxError as _e:
+    # str(e) throws away the source line and the caret that point at the typo.
+    _kind = "syntax"
+    _line = _e.lineno
+    _col = _e.offset
+    _err = "SYNTAX:" + "".join(traceback.format_exception_only(type(_e), _e))
+except _OutOfInput as _e:
+    _kind = "input"
+    _frames = _own_frames()
+    if _frames:
+        _line = _frames[-1].lineno
+    _err = ("RUNTIME:Your program called input() %d time(s), but this run only "
+            "supplies %d line(s) of input." % (_e.asked, _e.have))
+except _TookTooLong:
+    _kind = "timeout"
+    _err = ("RUNTIME:Your program was still running after ${timeout_ms} ms, so it was "
+            "stopped. Look for a loop that never ends.")
+except _TooMuchOutput:
+    _kind = "output"
+    _err = ("RUNTIME:Your program printed more than ${OUTPUT_BYTES_MAX} characters, so it "
+            "was stopped. Look for a print inside a loop that never ends.")
+except SystemExit:
+    # exit() and sys.exit() are how a beginner ends a program on purpose.
+    pass
+except BaseException as _e:
+    _kind = "runtime"
+    _frames = _own_frames()
+    if _frames:
+        _line = _frames[-1].lineno
+    _err = ("RUNTIME:Traceback (most recent call last):\\n"
+            + "".join(traceback.format_list(_frames))
+            + "".join(traceback.format_exception_only(type(_e), _e)))
 finally:
     sys.stdout = _old
-json.dumps({"out": _out.getvalue(), "err": _err, "prompts": _prompts})
+json.dumps({"out": _out.getvalue(), "err": _err, "prompts": _prompts,
+            "kind": _kind, "line": _line, "col": _col})
 `;
 }
 
@@ -220,9 +322,14 @@ export async function run(code, stdin_lines, options = {}) {
     assert_string(stdin_lines[index], `run: stdin_lines[${index}]`, LINE_COUNT_MAX);
   }
   const filename = check_filename(options.filename ?? SUBMISSION_FILENAME_DEFAULT);
+  const timeout_ms = assert_range(
+    options.timeout_ms ?? RUN_TIMEOUT_MS, "run: timeout_ms", 1, RUN_TIMEOUT_MS_MAX,
+  );
 
   assert(pyodide != null, "run: interpreter must be loaded");
-  const encoded = await pyodide.runPythonAsync(build_run_python(code, stdin_lines, filename));
+  const encoded = await pyodide.runPythonAsync(
+    build_run_python(code, stdin_lines, filename, timeout_ms),
+  );
   assert(typeof encoded === "string", "run: driver must return a JSON string");
   const result = JSON.parse(encoded);
 
@@ -236,6 +343,21 @@ export async function run(code, stdin_lines, options = {}) {
   assert(
     result.err === "" || result.err.startsWith("SYNTAX:") || result.err.startsWith("RUNTIME:"),
     `run: err must be empty or tagged, got ${result.err.slice(0, 40)}`,
+  );
+  assert(KINDS_ALLOWED.includes(result.kind), `run: unknown kind ${result.kind}`);
+  // A run either failed and said how, or succeeded and said nothing. One
+  // without the other means the driver fell through a branch.
+  assert(
+    (result.kind === "") === (result.err === ""),
+    `run: kind "${result.kind}" and err must agree`,
+  );
+  assert(
+    result.line === null || (Number.isInteger(result.line) && result.line > 0),
+    `run: line must be a positive integer or null, got ${result.line}`,
+  );
+  assert(
+    result.col === null || (Number.isInteger(result.col) && result.col >= 0),
+    `run: col must be a non-negative integer or null, got ${result.col}`,
   );
   return result;
 }

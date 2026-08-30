@@ -14,6 +14,7 @@ import assert from "node:assert/strict";
 import { test } from "node:test";
 
 import { AssertionError } from "../src/assert.js";
+import { RUN_TIMEOUT_MS, RUN_TIMEOUT_MS_MAX } from "../src/constants.js";
 import { LINE_LENGTH_CHARS_DEFAULT } from "../src/constants.js";
 
 const PYRUNNER_URL = new URL("../src/pyrunner.js", import.meta.url).href;
@@ -57,11 +58,16 @@ async function ready_runner(reply, options) {
   return { py_runner, interpreter, result };
 }
 
-/** Answers the run driver with one canned result and the lint bootstrap with findings. */
+/**
+ * Answers the run driver with one canned result and the lint bootstrap with
+ * findings. The fields a caller leaves out default to a clean run, so a test
+ * about stdout does not have to spell out `kind`, `line`, and `col`.
+ */
 function canned(run_result, findings = []) {
+  const reply = { kind: "", line: null, col: null, ...run_result };
   return (source) => (source.includes("_pyrunner_lint(")
     ? JSON.stringify(findings)
-    : (source.includes('json.dumps({"out"') ? JSON.stringify(run_result) : undefined));
+    : (source.includes('json.dumps({"out"') ? JSON.stringify(reply) : undefined));
 }
 
 test("a fresh runner is idle: not ready, no flake8, no reason yet", async () => {
@@ -140,7 +146,7 @@ test("run returns the stdout, the error tag, and the prompts that fired", async 
     canned({ out: "name? bob\nhi bob\n", err: "", prompts: ["name? "] }),
   );
   assert.deepEqual(await py_runner.run("print(1)", ["bob"]), {
-    out: "name? bob\nhi bob\n", err: "", prompts: ["name? "],
+    out: "name? bob\nhi bob\n", err: "", prompts: ["name? "], kind: "", line: null, col: null,
   });
 });
 
@@ -159,10 +165,51 @@ test("run embeds the source and stdin as JSON the driver decodes", async () => {
 
 test("run passes a student traceback through instead of throwing", async () => {
   const { py_runner } = await ready_runner(
-    canned({ out: "", err: "RUNTIME:Traceback…\nValueError", prompts: [] }),
+    canned({ out: "", err: "RUNTIME:Traceback…\nValueError", prompts: [], kind: "runtime", line: 3 }),
   );
   const result = await py_runner.run("int('x')", []);
   assert.match(result.err, /^RUNTIME:/);
+  assert.equal(result.kind, "runtime");
+  assert.equal(result.line, 3, "the editor puts a cursor here");
+});
+
+test("the driver carries what a beginner needs to read their own mistake", async () => {
+  const { py_runner, interpreter } = await ready_runner(canned({ out: "", err: "", prompts: [] }));
+  await py_runner.run("print(1)", [], { filename: "program1.py", timeout_ms: 250 });
+  const driver = interpreter.python.at(-1);
+  // Without linecache a frame prints a bare line number: the submission is
+  // compiled from a string, so Python has no file to quote the source from.
+  assert.ok(driver.includes("linecache.cache[_name]"), "frames must show their source line");
+  assert.ok(driver.includes("f.filename == _name"), "harness frames must be filtered out");
+  assert.ok(driver.includes("raise _OutOfInput"), "running out of stdin must be a sentence");
+  assert.ok(driver.includes("format_exception_only"), "a SyntaxError must keep its caret");
+  assert.ok(driver.includes("250 / 1000.0"), "the watchdog must carry the caller's deadline");
+  assert.ok(driver.includes("sys.settrace(_watchdog)"), "a loop that never ends must be stopped");
+});
+
+test("run defaults the deadline and rejects one outside the ceiling", async () => {
+  const { py_runner, interpreter } = await ready_runner(canned({ out: "", err: "", prompts: [] }));
+  await py_runner.run("print(1)", []);
+  assert.ok(interpreter.python.at(-1).includes(`${RUN_TIMEOUT_MS} / 1000.0`));
+  await assert.rejects(() => py_runner.run("print(1)", [], { timeout_ms: 0 }), /timeout_ms/);
+  await assert.rejects(
+    () => py_runner.run("print(1)", [], { timeout_ms: RUN_TIMEOUT_MS_MAX + 1 }), /timeout_ms/,
+  );
+});
+
+test("run rejects a widened result the driver could not have produced", async () => {
+  const unknown = await ready_runner(canned({ out: "", err: "", prompts: [], kind: "weird" }));
+  await assert.rejects(() => unknown.py_runner.run("x", []), /unknown kind weird/);
+
+  // A failure that names no reason, or a reason with no failure, means the
+  // driver fell through a branch rather than reporting one.
+  const silent = await ready_runner(canned({ out: "", err: "", prompts: [], kind: "runtime" }));
+  await assert.rejects(() => silent.py_runner.run("x", []), /kind "runtime" and err must agree/);
+
+  const bad_line = await ready_runner(
+    canned({ out: "", err: "SYNTAX:x", prompts: [], kind: "syntax", line: 0 }),
+  );
+  await assert.rejects(() => bad_line.py_runner.run("x", []), /line must be a positive integer/);
 });
 
 test("run rejects a result the driver could not have produced", async () => {

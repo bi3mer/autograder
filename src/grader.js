@@ -1,13 +1,17 @@
 /**
  * Page glue: file drop, grading run, rubric rendering.
  *
- * This is the only module that touches the DOM. An assignment page supplies
+ * This module owns the page's behaviour; `page.js` builds its markup and
+ * `handout.js` fills the column beside it, so the three of them are the DOM
+ * layer between them. An assignment page supplies
  * its test cases and rubric through `init` and reuses the shared page
  * skeleton (the element ids in `ELEMENT_IDS_DEFAULT`) and `css/a1.css`.
  * Nothing here knows about any specific assignment.
  */
 
 import { assert, assert_array, assert_range, assert_string } from "./assert.js";
+import * as checks from "./checks.js";
+import * as editor_box from "./editor.js";
 import { load_handout } from "./handout.js";
 import { escape_html } from "./html.js";
 import {
@@ -26,6 +30,7 @@ import {
   MANUAL_ROW_COUNT_MAX,
   NEEDLE_CHARS_MAX,
   POINTS_MAX,
+  DRAFT_SAVE_DELAY_MS,
   SOURCE_BYTES_MAX,
   STDIN_LINE_COUNT_MAX,
   TEST_CASE_COUNT_MAX,
@@ -59,6 +64,11 @@ import {
  *   `build_criteria` and appended under the handout, so the points a student
  *   reads are the points the grader awards. Pass `false` for a handout that
  *   writes its own.
+ * - `editor`: `true` for an in-page editor, or `{ starter, starter_href,
+ *   download }`. Absent or `false` leaves the page exactly as it was: no
+ *   editor markup, no editor ids, no behaviour change. With one, the buffer
+ *   is what gets graded, a dropped file lands in it, and Run executes it
+ *   against one example without spending a grading run.
  * - `styles_href`: another stylesheet, or `false` to link none. Defaults to
  *   `css/a1.css` beside this module.
  * - `element_ids`: overrides for any of `ELEMENT_IDS_DEFAULT`.
@@ -85,6 +95,24 @@ const ELEMENT_IDS_DEFAULT = {
   copy_status: "copystatus",
 };
 
+/**
+ * The editor's own ids, kept apart from `ELEMENT_IDS_DEFAULT` on purpose.
+ * `resolve_elements` asserts one element per id and `require_element` asserts
+ * that each exists, so an optional id routed through either would fail
+ * startup on every page that never asked for an editor.
+ */
+const EDITOR_IDS_DEFAULT = {
+  code: "code",
+  gutter: "gutter",
+  run_code: "runcode",
+  run_status: "runstatus",
+  case_select: "caseselect",
+  stdin: "stdin",
+  console: "console",
+  download: "download",
+  reset: "reset",
+};
+
 /** Where a handout renders when the config names a file but no mount. */
 const HANDOUT_MOUNT_DEFAULT = "#handout";
 
@@ -105,6 +133,25 @@ function handout_options(handout) {
     href: handout.href,
     mount: handout.mount ?? HANDOUT_MOUNT_DEFAULT,
     render_rubric: handout.render_rubric ?? true,
+  };
+}
+
+/**
+ * `editor: true` is shorthand for the full form, the way `handout` works
+ * above it. `false` and `undefined` both mean no editor, so a page that never
+ * mentions it is exactly the page it was.
+ */
+function editor_options(config_editor) {
+  if (config_editor == null || config_editor === false) return null;
+  if (config_editor === true) return { starter: "", starter_href: "", download: true };
+  assert(
+    typeof config_editor === "object",
+    "config.editor must be true, false, or an options object",
+  );
+  return {
+    starter: config_editor.starter ?? "",
+    starter_href: config_editor.starter_href ?? "",
+    download: config_editor.download ?? true,
   };
 }
 
@@ -160,6 +207,31 @@ function resolve_elements(ids) {
   return elements;
 }
 
+/**
+ * Resolved only when the assignment asked for an editor, so the ids stay
+ * optional. A page that supplies its own markup still has to carry all of
+ * them: half an editor is worse than none.
+ */
+function resolve_editor_elements(ids) {
+  assert(ids != null && typeof ids === "object", "resolve_editor_elements: ids must be an object");
+  const elements = {
+    code: require_element(ids.code),
+    gutter: require_element(ids.gutter),
+    run_code: require_element(ids.run_code),
+    run_status: require_element(ids.run_status),
+    case_select: require_element(ids.case_select),
+    stdin: require_element(ids.stdin),
+    console: require_element(ids.console),
+    download: require_element(ids.download),
+    reset: require_element(ids.reset),
+  };
+  assert(
+    Object.keys(elements).length === Object.keys(ids).length,
+    "resolve_editor_elements: one element per id",
+  );
+  return elements;
+}
+
 function check_config(config) {
   assert(
     config != null && typeof config === "object",
@@ -174,6 +246,15 @@ function check_config(config) {
     assert(
       typeof handout.render_rubric === "boolean",
       "config.handout.render_rubric must be a boolean",
+    );
+  }
+  const editor = editor_options(config.editor);
+  if (editor !== null) {
+    assert_string(editor.starter, "config.editor.starter", SOURCE_BYTES_MAX);
+    assert_string(editor.starter_href, "config.editor.starter_href", HANDOUT_HREF_CHARS_MAX);
+    assert(
+      typeof editor.download === "boolean",
+      "config.editor.download must be a boolean",
     );
   }
   const cases = assert_array(config.cases, "config.cases", TEST_CASE_COUNT_MAX);
@@ -300,6 +381,241 @@ function read_file_text(file) {
   });
 }
 
+/**
+ * A submission worth grading. An editor starts empty, so "loaded" is not the
+ * same question as "has anything in it".
+ */
+function can_grade(session) {
+  assert(session != null, "can_grade: session must not be null");
+  return session.source != null && session.source.trim() !== "" && py_runner.is_ready();
+}
+
+/** One place decides what is clickable, so the two entry paths cannot disagree. */
+function refresh_buttons(session) {
+  assert(session != null, "refresh_buttons: session must not be null");
+  session.elements.run.disabled = session.grading || !can_grade(session);
+  if (session.editor_elements != null) {
+    session.editor_elements.run_code.disabled = session.running || !can_grade(session);
+  }
+}
+
+/**
+ * The anchor an `output-diff` criterion trims transcripts to, read off the
+ * rubric rather than configured twice. Run must compare what Grade compares,
+ * or a student passes the preview and fails the score.
+ */
+function diff_anchor_prefix(config) {
+  const criteria = config.build_criteria([]);
+  for (let index = 0; index < criteria.length; index++) {
+    if (criteria[index].type === "output-diff") return criteria[index].anchor_prefix;
+  }
+  return undefined;
+}
+
+/** The example the picker is on, or `null` for the free-form entry. */
+function selected_case(session) {
+  assert(session != null, "selected_case: session must not be null");
+  const index = Number(session.editor_elements.case_select.value);
+  if (!Number.isInteger(index) || index < 0) return null;
+  return session.config.cases[index] ?? null;
+}
+
+/** Drop the tag `py_runner` puts on an error; the console is not parsing it. */
+function untagged(err) {
+  assert(typeof err === "string", "untagged: err must be a string");
+  const colon = err.indexOf(":");
+  return colon === -1 ? err : err.slice(colon + 1);
+}
+
+/**
+ * What one run looks like in the console: the transcript, then the failure if
+ * there was one, then how the output compares to the example that was run.
+ *
+ * The diff comes from the same `diff_lines` and the same renderer the rubric
+ * uses, so a student can see exactly which line is wrong without spending a
+ * grading run to find out.
+ */
+function run_console_html(session, result, test_case) {
+  assert(session != null, "run_console_html: session must not be null");
+  assert(result != null, "run_console_html: result must not be null");
+  const parts = [];
+  parts.push(result.out === ""
+    ? '<p class="console-note">The program printed nothing.</p>'
+    : `<pre class="io">${escape_html(result.out)}</pre>`);
+
+  if (result.err !== "") {
+    parts.push(`<pre class="io bad">${escape_html(untagged(result.err).trim())}</pre>`);
+    if (result.line != null) {
+      parts.push(
+        `<button class="ghost jump" type="button" data-line="${result.line}" `
+        + `data-col="${result.col ?? 1}">Go to line ${result.line}</button>`,
+      );
+    }
+    return parts.join("");
+  }
+
+  if (test_case != null) {
+    const diff = checks.diff_lines(result.out, test_case.expected_lines, {
+      anchor_prefix: session.anchor_prefix,
+    });
+    parts.push(diff.all_match
+      ? '<p class="console-note good">Output matches this example exactly.</p>'
+      : '<p class="console-note bad">Output does not match this example yet.</p>'
+        + rubric.render_diff_html(diff.rows));
+  }
+  return parts.join("");
+}
+
+/** Run the buffer once, against whatever the stdin box currently holds. */
+async function run_once(session) {
+  assert(session != null, "run_once: session must not be null");
+  const elements = session.editor_elements;
+  if (session.running || !can_grade(session)) return;
+  session.running = true;
+  refresh_buttons(session);
+  elements.run_status.textContent = "Running…";
+  elements.console.innerHTML = "";
+  try {
+    const stdin_lines = editor_box.stdin_lines_from_text(elements.stdin.value);
+    const result = await py_runner.run(session.source, stdin_lines, {
+      filename: session.config.filename,
+    });
+    elements.console.innerHTML = run_console_html(session, result, selected_case(session));
+    elements.run_status.textContent = result.err === "" ? "Ran." : "Stopped.";
+  } catch (error) {
+    // A throw here is a runner bug, not a student mistake. Say so, then let it
+    // reach the console with its stack intact.
+    elements.run_status.textContent = `Runner error: ${reason_for(error)}`;
+    throw error;
+  } finally {
+    session.running = false;
+    refresh_buttons(session);
+  }
+}
+
+/** The editor is the source of truth once it exists; the drop zone feeds it. */
+function set_editor_source(session, text) {
+  assert(session != null, "set_editor_source: session must not be null");
+  assert(typeof text === "string", "set_editor_source: text must be a string");
+  session.editor.set_value(text);
+}
+
+function save_current_draft(session) {
+  assert(session != null, "save_current_draft: session must not be null");
+  editor_box.save_draft(session.draft_key, session.source ?? "");
+}
+
+function download_source(session) {
+  assert(session != null, "download_source: session must not be null");
+  const { config } = session;
+  // Students still upload the real file, so the buffer has to become one.
+  const blob = new Blob([session.source ?? ""], { type: "text/x-python" });
+  const url = URL.createObjectURL(blob);
+  const link = document.createElement("a");
+  link.href = url;
+  link.download = config.filename;
+  document.body.appendChild(link);
+  link.click();
+  link.remove();
+  URL.revokeObjectURL(url);
+}
+
+/** A draft beats the starter: it is the work the student came back for. */
+async function initial_source(session) {
+  assert(session != null, "initial_source: session must not be null");
+  const draft = editor_box.load_draft(session.draft_key);
+  if (draft != null && draft !== "") return draft;
+  return await starter_source(session);
+}
+
+/**
+ * A starter file is fetched rather than inlined so it can live beside the
+ * handout as real Python. A fetch that fails leaves an empty editor and says
+ * so on the status line, because an assignment is still doable without it.
+ */
+async function starter_source(session) {
+  const { starter, starter_href } = session.editor_config;
+  if (starter_href === "") return starter;
+  try {
+    const response = await fetch(new URL(starter_href, document.baseURI).href);
+    if (!response.ok) {
+      throw new Error(`the server answered ${response.status} ${response.statusText}`.trim());
+    }
+    return await response.text();
+  } catch (error) {
+    session.editor_elements.run_status.textContent =
+      `Could not load the starter file: ${reason_for(error)}`;
+    return starter;
+  }
+}
+
+/** Fill the picker from the rubric's own examples, and prime the stdin box. */
+function fill_case_picker(session) {
+  assert(session != null, "fill_case_picker: session must not be null");
+  const { cases } = session.config;
+  const options = cases.map(
+    (test_case, index) => `<option value="${index}">${escape_html(test_case.name)}</option>`,
+  );
+  options.push('<option value="-1">Input of my own</option>');
+  session.editor_elements.case_select.innerHTML = options.join("");
+  sync_stdin_to_case(session);
+}
+
+function sync_stdin_to_case(session) {
+  const test_case = selected_case(session);
+  if (test_case == null) return;
+  session.editor_elements.stdin.value = test_case.stdin_lines.join("\n");
+}
+
+function wire_editor_pane(session) {
+  assert(session != null, "wire_editor_pane: session must not be null");
+  const elements = session.editor_elements;
+
+  session.editor = editor_box.wire_editor(
+    { textarea: elements.code, gutter: elements.gutter },
+    {
+      on_change: (text) => {
+        if (text.length > SOURCE_BYTES_MAX) {
+          elements.run_status.textContent = "That is too much code to grade.";
+          return;
+        }
+        session.source = text;
+        refresh_buttons(session);
+        // Debounced: a keystroke per write would hammer storage for nothing.
+        globalThis.clearTimeout(session.draft_timer);
+        session.draft_timer = globalThis.setTimeout(
+          () => save_current_draft(session), DRAFT_SAVE_DELAY_MS,
+        );
+      },
+      on_run: () => void run_once(session),
+    },
+  );
+
+  fill_case_picker(session);
+  elements.case_select.addEventListener("change", () => sync_stdin_to_case(session));
+  elements.run_code.addEventListener("click", () => void run_once(session));
+
+  // Delegated, because the button only exists while an error is on screen.
+  elements.console.addEventListener("click", (event) => {
+    const button = event.target.closest?.(".jump");
+    if (button == null) return;
+    session.editor.focus_line(Number(button.dataset.line), Number(button.dataset.col));
+  });
+
+  elements.download.addEventListener("click", () => download_source(session));
+  if (!session.editor_config.download) elements.download.style.display = "none";
+
+  elements.reset.addEventListener("click", () => {
+    if (!globalThis.confirm("Replace what you have written with the starter code?")) return;
+    void starter_source(session).then((text) => {
+      set_editor_source(session, text);
+      editor_box.clear_draft(session.draft_key);
+    });
+  });
+
+  void initial_source(session).then((text) => set_editor_source(session, text));
+}
+
 function reset_output(session) {
   assert(session != null, "reset_output: session must not be null");
   const { elements } = session;
@@ -336,6 +652,9 @@ async function accept_file(session, file) {
   }
 
   session.source = text;
+  // With an editor on the page the buffer is what gets graded, so a dropped
+  // file lands in it rather than beside it.
+  if (session.editor != null) set_editor_source(session, text);
   const is_python = file.name.endsWith(".py");
   const submit_to = config.submit_to ?? "BrightSpace";
   elements.filename.textContent =
@@ -344,7 +663,7 @@ async function accept_file(session, file) {
       ? "  ✓"
       : `  ⚠ Not a Python file. Submit a .py file on ${submit_to}`);
   reset_output(session);
-  elements.run.disabled = !py_runner.is_ready();
+  refresh_buttons(session);
   elements.status.textContent = "File loaded. Ready to grade.";
 }
 
@@ -474,10 +793,9 @@ function wire_buttons(session) {
   const { elements } = session;
 
   elements.run.addEventListener("click", async () => {
-    if (session.source == null || !py_runner.is_ready() || session.grading)
-      return;
+    if (session.grading || !can_grade(session)) return;
     session.grading = true;
-    elements.run.disabled = true;
+    refresh_buttons(session);
     elements.status.textContent = "Grading…";
     try {
       await grade_submission(session);
@@ -489,7 +807,7 @@ function wire_buttons(session) {
       throw error;
     } finally {
       session.grading = false;
-      elements.run.disabled = session.source == null || !py_runner.is_ready();
+      refresh_buttons(session);
     }
   });
 
@@ -509,7 +827,7 @@ async function boot(session) {
     elements.status.textContent = `Python runtime failed to load: ${reason_for(error)}`;
     return;
   }
-  elements.run.disabled = session.source == null;
+  refresh_buttons(session);
 }
 
 /**
@@ -517,7 +835,7 @@ async function boot(session) {
  * elements keeps them, and everything else gets the generated skeleton, so an
  * assignment page is a title, a stylesheet, and its data.
  */
-function ensure_page(config, ids) {
+function ensure_page(config, ids, editor_ids) {
   assert(config != null, "ensure_page: config must not be null");
   assert(ids != null, "ensure_page: ids must not be null");
   if (document.getElementById(ids.run) != null) return false;
@@ -527,6 +845,8 @@ function ensure_page(config, ids) {
   }
   render_skeleton({
     ids,
+    editor_ids,
+    filename: config.filename,
     title: config.title ?? document.title ?? "Autograder",
     subtitle: config.subtitle,
     headline_label: config.headline_label ?? `/ ${config.max_auto_points} auto`,
@@ -553,7 +873,11 @@ export function init(config) {
     ...ELEMENT_IDS_DEFAULT,
     ...(config.element_ids ?? {}),
   };
-  ensure_page(config, ids);
+  const editor_config = editor_options(config.editor);
+  const editor_ids = editor_config === null
+    ? null
+    : { ...EDITOR_IDS_DEFAULT, ...(config.editor_element_ids ?? {}) };
+  ensure_page(config, ids, editor_ids);
   // Everything one wired-up page owns. Passing this session explicitly,
   // rather than closing over a pile of `let`s, keeps every handler a
   // top-level function small enough to read in one screen. `source` is null
@@ -565,10 +889,21 @@ export function init(config) {
     manual_rows: config.manual_rows ?? [],
     source: null,
     grading: false,
+    // Everything below belongs to the editor, and stays null without one.
+    editor_config,
+    editor_elements: editor_config === null ? null : resolve_editor_elements(editor_ids),
+    editor: null,
+    running: false,
+    draft_timer: 0,
+    draft_key: editor_config === null
+      ? ""
+      : editor_box.draft_key(globalThis.location?.pathname ?? "/", config.filename),
+    anchor_prefix: editor_config === null ? undefined : diff_anchor_prefix(config),
   };
 
   wire_file_input(session);
   wire_buttons(session);
+  if (editor_config !== null) wire_editor_pane(session);
   // Fetched rather than awaited: the prose and the Python runtime load in
   // parallel, and a handout that never arrives must not hold up grading.
   const handout = handout_options(config.handout);

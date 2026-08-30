@@ -205,8 +205,14 @@ async function flake8_check(criterion, context) {
   return { earned, pass: clean, detail };
 }
 
-/** A `<details>` block, collapsed so a long diff does not bury the rubric. */
-function render_diff_html(rows) {
+/**
+ * A `<details>` block, collapsed so a long diff does not bury the rubric.
+ *
+ * Exported because the editor's Run panel shows the same comparison against
+ * the same `diff_lines` rows. One renderer means a student cannot be shown a
+ * diff before grading that disagrees with the one grading produces.
+ */
+export function render_diff_html(rows) {
   assert(Array.isArray(rows), "render_diff_html: rows must be an array");
   assert(rows.length <= LINE_COUNT_MAX, `render_diff_html: at most ${LINE_COUNT_MAX} rows`);
   const body = rows.map((row) => (row.ok

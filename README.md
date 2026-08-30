@@ -86,8 +86,10 @@ grader_app.init({
 });
 ```
 
-Every page under `cs230/` is wired this way: the handout fills the left column
-and the grader the right, with `.split` in `css/a1.css` carrying the layout.
+The `w1p1`, `w1p2`, and `w2p2` pages are wired this way: the handout fills the
+left column and the grader the right, with `.split` in `css/a1.css` carrying the
+layout. `a1.html` predates the handout support and still ships `cs230/a1.md`
+separately, so it renders as a single centred sheet.
 
 `handout: "w1p1.md"` is shorthand for the same thing mounted at `#handout`. The
 path resolves against the page rather than against `src/`, so the markdown sits
@@ -136,9 +138,81 @@ the author typed rather than as an anchor.
 A handout that fails to load says why, in the space the prose would have
 filled, and the grader beside it keeps working.
 
+## The Editor
+
+An assignment can carry an editor, so a student writes, runs, and grades in one
+tab instead of round-tripping through a file. It is off unless the config asks
+for it, which means the rubric decides, not the page markup and not the student:
+
+```js
+grader_app.init({
+  filename: "w2-2.py",
+  cases: CASES,
+  build_criteria,
+  max_auto_points: 40,
+  editor: { starter_href: "w2p2-starter.py" },
+});
+```
+
+`editor: true` is shorthand for the defaults. The full form takes `starter`
+(literal text), `starter_href` (a `.py` file fetched beside the page, which is
+what most assignments want, since a starter you can open and lint beats one
+buried in a string), and `download`. `cs230/w2p2.html` is the page that uses it;
+everything else passes `editor: false` and is untouched.
+
+**Run is not Grade.** Grade does what it always did: every example, the whole
+rubric, a copyable summary. Run executes the buffer once against one example and
+shows the transcript. A student who has to spend a grading run to discover a
+misspelled prompt starts guessing instead of iterating.
+
+Run pulls its input from the same `cases` the rubric scores against. Picking an
+example fills the stdin box with that case's `stdin_lines`, and the box stays
+editable for probing a bug with input of your own. Because the fake `input()`
+echoes `prompt + value` to stdout, a Run transcript is byte-identical to what
+grading diffs, so the panel can show the expected-versus-actual comparison for
+that one example, through the same `diff_lines` and the same renderer the rubric
+uses. A preview that disagreed with the score would be worse than no preview.
+
+The buffer is the submission: typing sets it, a dropped `.py` file lands in it,
+and Download writes it back out under `config.filename`, because students still
+upload the real file. Drafts save to `localStorage` behind a debounce, keyed by
+page path, so a refresh does not cost an afternoon.
+
+`src/editor.js` is a textarea with the four behaviours that make one usable for
+Python: Tab and Shift+Tab indent by four instead of moving focus, Enter carries
+the indent and steps in after a line ending in `:`, a gutter numbers the lines,
+and Ctrl+Enter runs. Edits go through `execCommand("insertText")`, deprecated and
+used deliberately: it is the only way to change a textarea that leaves the
+browser's undo history intact. There is no syntax highlighting, which would mean
+a CodeMirror dependency and the build step this repository does not have.
+
+### What an Error Looks Like
+
+`py_runner.run` returns `kind`, `line`, and `col` beside `out`, `err`, and
+`prompts`. `kind` is `""`, `"syntax"`, `"runtime"`, `"input"`, `"timeout"`, or
+`"output"`; `err` keeps its two `SYNTAX:` and `RUNTIME:` prefixes, because a
+syntax error is the only one the rubric treats differently. The console renders
+`line` as a button that puts the cursor on it.
+
+The driver goes to some trouble so a beginner reads their own mistake rather
+than the grader's internals. It primes `linecache`, because a submission
+compiled from a string has no file for Python to quote a source line out of. It
+rebuilds the traceback from only the frames belonging to the submission, because
+the raw one opens with the driver's own `exec` call. Running out of stdin
+becomes one sentence instead of a chained `StopIteration` and `EOFError`, which
+is the most common way a first attempt fails. And a `SyntaxError` is formatted
+with `format_exception_only` rather than `str(e)`, which keeps the source line
+and the caret that `str(e)` throws away.
+
+A `sys.settrace` watchdog stops a run past `RUN_TIMEOUT_MS`, and the capture
+buffer stops one past `OUTPUT_BYTES_MAX`. Pyodide runs on the page's only
+thread, so before this a `while True:` froze the tab with no way out but a
+reload. That was true of grading too, not just the editor.
+
 ## Adding an Assignment
 
-Copy `cs230/a1.html`, then replace two things: `CASES` (the stdin and expected
+Copy `cs230/w1p1.html` (or `cs230/w2p2.html` for one with an editor), then
+replace two things: `CASES` (the stdin and expected
 output for each example in the handout) and `build_criteria` (the rubric). The
 problem statement goes in a `.md` file beside it, named by `handout`.
 Everything else is shared, and the page is about a dozen lines around that
@@ -156,7 +230,7 @@ point per finding, with a floor of zero.
 
 ```
 npm run serve       # http://localhost:8000/cs230/a1.html
-npm test            # 170 tests, straight from a clone: nothing to install
+npm test            # 188 tests, straight from a clone: nothing to install
 ```
 
 Serve over HTTP rather than opening a page directly: ES modules, Pyodide's
@@ -178,12 +252,22 @@ the Python it is handed, which covers the encoding and the state guards
 without WebAssembly. `test_markdown.js` covers the parser in full, since it is
 a pure function from string to string.
 
+`test_editor.js` covers the indent arithmetic, which is where a silent wrong
+answer would live: an off-by-one in `indent_selection` moves a student's cursor
+into the middle of their own indentation and they cannot say why.
+
 The tests cover the grading engine, which is where a wrong score comes from.
 They do not cover the DOM: a test double for the browser is a second
 implementation to trust, and jsdom is a large dependency to carry for it. The
 generated page is checked by loading it. Serve the site and drop a `.py` file
 on `cs230/a1.html`; a missing element fails an assertion at startup, in front
-of you, rather than silently.
+of you, rather than silently. For the editor, open `cs230/w2p2.html` and run a
+program with a syntax error, one that divides by zero, one that reads more
+input than the example supplies, and one that loops forever.
+
+Chrome caches `src/*.js` aggressively over `python3 -m http.server`, which sends
+no `Cache-Control`. A change that appears not to have taken effect is usually
+that; hard-reload before believing it.
 
 ## Deploying
 

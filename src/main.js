@@ -20,6 +20,7 @@
 export * as assertions from "./assert.js";
 export * as checks from "./checks.js";
 export * as constants from "./constants.js";
+export * as editor from "./editor.js";
 export * as grader_app from "./grader.js";
 export * as handout from "./handout.js";
 export * as markdown from "./markdown.js";

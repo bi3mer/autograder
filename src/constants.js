@@ -95,3 +95,34 @@ export const MARKDOWN_INFO_CHARS_MAX = 32;
 
 /** A handout's URL, as written in an assignment page's config. */
 export const HANDOUT_HREF_CHARS_MAX = 2048;
+
+/**
+ * How long one run may take before the watchdog stops it. Pyodide runs on the
+ * page's only thread, so a loop that never ends freezes the tab with no way
+ * out but a reload. A first-year program finishes in milliseconds; this sits
+ * far above that and far below a student's patience.
+ */
+export const RUN_TIMEOUT_MS = 5000;
+
+/**
+ * Trace events between clock checks in the watchdog. Reading the clock on
+ * every line costs more than the check saves, and a `while True: pass` loop
+ * turns over roughly sixteen million events per second, so sampling this
+ * often still stops it within a few milliseconds of the deadline.
+ */
+export const TRACE_CHECK_INTERVAL_EVENTS = 2000;
+
+/** A draft held in localStorage, in characters. */
+export const DRAFT_BYTES_MAX = 256 * 1024;
+
+/** Lines the editor's gutter will number. */
+export const EDITOR_LINE_COUNT_MAX = 10_000;
+
+/** Debounce before a draft is written to localStorage. */
+export const DRAFT_SAVE_DELAY_MS = 400;
+
+/** Ceiling a page may raise `RUN_TIMEOUT_MS` to for one run. */
+export const RUN_TIMEOUT_MS_MAX = 120_000;
+
+/** Spaces one indent step inserts in the editor. Python's own convention. */
+export const EDITOR_INDENT_SPACES = 4;

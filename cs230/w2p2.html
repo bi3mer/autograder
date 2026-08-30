@@ -1,240 +1,235 @@
 <!doctype html>
 <html lang="en">
-    <head>
-        <meta charset="UTF-8" />
-        <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-        <title>Login Autograder</title>
-        <link rel="stylesheet" href="../css/a1.css" />
-        <script src="https://cdn.jsdelivr.net/pyodide/v0.26.2/full/pyodide.js"></script>
-    </head>
-    <body>
-        <div class="split">
-            <section class="sheet">
-                <!-- The whole problem statement, fetched from w2p2.md and
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>Login Autograder</title>
+    <link rel="stylesheet" href="../css/a1.css" />
+    <script src="https://cdn.jsdelivr.net/pyodide/v0.26.2/full/pyodide.js"></script>
+  </head>
+  <body>
+    <div class="split">
+      <section class="sheet">
+        <!-- The whole problem statement, fetched from w2p2.md and
                      rendered by src/markdown.js: title, examples and rubric
                      included. The file is the handout, readable on its own. -->
-                <div class="prose" id="handout"></div>
-            </section>
+        <div class="prose" id="handout"></div>
+      </section>
 
-            <section id="grader"></section>
-        </div>
-        <footer>bi3mer · Runs Python via Pyodide</footer>
+      <section id="grader"></section>
+    </div>
+    <footer>bi3mer · Runs Python via Pyodide</footer>
 
-        <script type="module">
-            import { grader_app } from "../src/main.js";
+    <script type="module">
+      import { grader_app } from "../src/main.js";
 
-            // The prompts drive both the input() needles the rubric looks
-            // for and the stdin each case feeds, so the wording is written
-            // once here. The handout quotes them again in w2p2.md, which is
-            // the one place the two can drift. Both prompts end in a space,
-            // so a transcript reads "Username: user".
-            const PROMPTS = ["Username: ", "Password: "];
+      // The prompts drive both the input() needles the rubric looks
+      // for and the stdin each case feeds, so the wording is written
+      // once here. The handout quotes them again in w2p2.md, which is
+      // the one place the two can drift. Both prompts end in a space,
+      // so a transcript reads "Username: user".
+      const PROMPTS = ["Username: ", "Password: "];
 
-            // Unlike the other problems, expected_lines carries the two
-            // echoed prompt lines as well as the program's own output, and
-            // the output criterion sets no anchor_prefix. An anchor skips
-            // everything before the first real output line, but it is one
-            // prefix for the whole criterion, and the three outcomes here
-            // ("... logged in.", "Invalid password for: ...", "No valid
-            // user found.") share no opening text to anchor on. The cost is
-            // that a wrong prompt misses on both criteria rather than one.
-            //
-            // Examples 1-3 are the handout's. Examples 4-5 cover the two
-            // branches those never reach: a successful admin login, and a
-            // wrong password on the normal account. Without them, a program
-            // that hardcodes "admin" into the invalid-password message, or
-            // that only ever logs the normal account in, still scores full
-            // marks.
-            //
-            // Examples 6-12 each catch a wrong-but-plausible implementation
-            // in the act, and the comment on each says which mistake it
-            // catches. Several expect a line ending in a space, because the
-            // echoed prompt is all the program printed before the person
-            // typed nothing: "Username: " in example 7 is correct as
-            // written, so do not strip those.
-            const CASES = [
-                {
-                    name: "Example 1 — normal account, correct password",
-                    stdin_lines: ["user", "!123Password"],
-                    expected_lines: [
-                        "Username: user",
-                        "Password: !123Password",
-                        "user logged in.",
-                    ],
-                },
-                {
-                    name: "Example 2 — admin, wrong password",
-                    stdin_lines: ["admin", "bentley123"],
-                    expected_lines: [
-                        "Username: admin",
-                        "Password: bentley123",
-                        "Invalid password for: admin",
-                    ],
-                },
-                {
-                    name: "Example 3 — right password, wrong case on username",
-                    stdin_lines: ["Admin", "bentley123!"],
-                    expected_lines: [
-                        "Username: Admin",
-                        "Password: bentley123!",
-                        "No valid user found.",
-                    ],
-                },
-                {
-                    name: "Example 4 — admin account, correct password",
-                    stdin_lines: ["admin", "bentley123!"],
-                    expected_lines: [
-                        "Username: admin",
-                        "Password: bentley123!",
-                        "admin logged in.",
-                    ],
-                },
-                {
-                    name: "Example 5 — normal account, wrong password",
-                    stdin_lines: ["user", "password123"],
-                    expected_lines: [
-                        "Username: user",
-                        "Password: password123",
-                        "Invalid password for: user",
-                    ],
-                },
-                {
-                    // Catches `if USERNAME_ADMIN in username`, which treats
-                    // any username containing "admin" as the admin.
-                    name: "Example 6 — username 'adminadmin' is nobody",
-                    stdin_lines: ["adminadmin", "bentley123!"],
-                    expected_lines: [
-                        "Username: adminadmin",
-                        "Password: bentley123!",
-                        "No valid user found.",
-                    ],
-                },
-                {
-                    // Catches a program that treats empty input as a match,
-                    // usually by testing truthiness instead of equality.
-                    name: "Example 7 — nothing typed for either prompt",
-                    stdin_lines: ["", ""],
-                    expected_lines: [
-                        "Username: ",
-                        "Password: ",
-                        "No valid user found.",
-                    ],
-                },
-                {
-                    // A real username with no password at all still has to
-                    // report which account the attempt was against.
-                    name: "Example 8 — real username, empty password",
-                    stdin_lines: ["admin", ""],
-                    expected_lines: [
-                        "Username: admin",
-                        "Password: ",
-                        "Invalid password for: admin",
-                    ],
-                },
-                {
-                    // Catches .strip() on the username. Note the trailing
-                    // space in both the stdin line and the echoed line.
-                    name: "Example 9 — 'admin ' with a trailing space",
-                    stdin_lines: ["admin ", "bentley123!"],
-                    expected_lines: [
-                        "Username: admin ",
-                        "Password: bentley123!",
-                        "No valid user found.",
-                    ],
-                },
-                {
-                    // Catches .lower() or .upper() carried over from the
-                    // previous problem, where "E" had to count as "e".
-                    name: "Example 10 — 'USER' in uppercase is nobody",
-                    stdin_lines: ["USER", "!123Password"],
-                    expected_lines: [
-                        "Username: USER",
-                        "Password: !123Password",
-                        "No valid user found.",
-                    ],
-                },
-                {
-                    // Catches a program that asks "is this a valid password"
-                    // rather than "is this the password for this account".
-                    name: "Example 11 — normal account, admin's password",
-                    stdin_lines: ["user", "bentley123!"],
-                    expected_lines: [
-                        "Username: user",
-                        "Password: bentley123!",
-                        "Invalid password for: user",
-                    ],
-                },
-                {
-                    // The password check has the same substring trap as the
-                    // username check.
-                    name: "Example 12 — password with an extra character",
-                    stdin_lines: ["admin", "bentley123!!"],
-                    expected_lines: [
-                        "Username: admin",
-                        "Password: bentley123!!",
-                        "Invalid password for: admin",
-                    ],
-                },
-            ];
+      // Unlike the other problems, expected_lines carries the two
+      // echoed prompt lines as well as the program's own output, and
+      // the output criterion sets no anchor_prefix. An anchor skips
+      // everything before the first real output line, but it is one
+      // prefix for the whole criterion, and the three outcomes here
+      // ("... logged in.", "Invalid password for: ...", "No valid
+      // user found.") share no opening text to anchor on. The cost is
+      // that a wrong prompt misses on both criteria rather than one.
+      //
+      // Examples 1-3 are the handout's. Examples 4-5 cover the two
+      // branches those never reach: a successful admin login, and a
+      // wrong password on the normal account. Without them, a program
+      // that hardcodes "admin" into the invalid-password message, or
+      // that only ever logs the normal account in, still scores full
+      // marks.
+      //
+      // Examples 6-12 each catch a wrong-but-plausible implementation
+      // in the act, and the comment on each says which mistake it
+      // catches. Several expect a line ending in a space, because the
+      // echoed prompt is all the program printed before the person
+      // typed nothing: "Username: " in example 7 is correct as
+      // written, so do not strip those.
+      const CASES = [
+        {
+          name: "Example 1 — normal account, correct password",
+          stdin_lines: ["user", "!123Password"],
+          expected_lines: [
+            "Username: user",
+            "Password: !123Password",
+            "user logged in.",
+          ],
+        },
+        {
+          name: "Example 2 — admin, wrong password",
+          stdin_lines: ["admin", "bentley123"],
+          expected_lines: [
+            "Username: admin",
+            "Password: bentley123",
+            "Invalid password for: admin",
+          ],
+        },
+        {
+          name: "Example 3 — right password, wrong case on username",
+          stdin_lines: ["Admin", "bentley123!"],
+          expected_lines: [
+            "Username: Admin",
+            "Password: bentley123!",
+            "No valid user found.",
+          ],
+        },
+        {
+          name: "Example 4 — admin account, correct password",
+          stdin_lines: ["admin", "bentley123!"],
+          expected_lines: [
+            "Username: admin",
+            "Password: bentley123!",
+            "admin logged in.",
+          ],
+        },
+        {
+          name: "Example 5 — normal account, wrong password",
+          stdin_lines: ["user", "password123"],
+          expected_lines: [
+            "Username: user",
+            "Password: password123",
+            "Invalid password for: user",
+          ],
+        },
+        {
+          // Catches `if USERNAME_ADMIN in username`, which treats
+          // any username containing "admin" as the admin.
+          name: "Example 6 — username 'adminadmin' is nobody",
+          stdin_lines: ["adminadmin", "bentley123!"],
+          expected_lines: [
+            "Username: adminadmin",
+            "Password: bentley123!",
+            "No valid user found.",
+          ],
+        },
+        {
+          // Catches a program that treats empty input as a match,
+          // usually by testing truthiness instead of equality.
+          name: "Example 7 — nothing typed for either prompt",
+          stdin_lines: ["", ""],
+          expected_lines: ["Username: ", "Password: ", "No valid user found."],
+        },
+        {
+          // A real username with no password at all still has to
+          // report which account the attempt was against.
+          name: "Example 8 — real username, empty password",
+          stdin_lines: ["admin", ""],
+          expected_lines: [
+            "Username: admin",
+            "Password: ",
+            "Invalid password for: admin",
+          ],
+        },
+        {
+          // Catches .strip() on the username. Note the trailing
+          // space in both the stdin line and the echoed line.
+          name: "Example 9 — 'admin ' with a trailing space",
+          stdin_lines: ["admin ", "bentley123!"],
+          expected_lines: [
+            "Username: admin ",
+            "Password: bentley123!",
+            "No valid user found.",
+          ],
+        },
+        {
+          // Catches .lower() or .upper() carried over from the
+          // previous problem, where "E" had to count as "e".
+          name: "Example 10 — 'USER' in uppercase is nobody",
+          stdin_lines: ["USER", "!123Password"],
+          expected_lines: [
+            "Username: USER",
+            "Password: !123Password",
+            "No valid user found.",
+          ],
+        },
+        {
+          // Catches a program that asks "is this a valid password"
+          // rather than "is this the password for this account".
+          name: "Example 11 — normal account, admin's password",
+          stdin_lines: ["user", "bentley123!"],
+          expected_lines: [
+            "Username: user",
+            "Password: bentley123!",
+            "Invalid password for: user",
+          ],
+        },
+        {
+          // The password check has the same substring trap as the
+          // username check.
+          name: "Example 12 — password with an extra character",
+          stdin_lines: ["admin", "bentley123!!"],
+          expected_lines: [
+            "Username: admin",
+            "Password: bentley123!!",
+            "Invalid password for: admin",
+          ],
+        },
+      ];
 
-            // Both quote styles, and with or without the trailing space, so a
-            // student is graded on the prompt's wording rather than on which
-            // quote character they reached for.
-            function prompt_needles(prompt) {
-                const trimmed = prompt.trimEnd();
-                return [
-                    `input("${prompt}")`,
-                    `input('${prompt}')`,
-                    `input("${trimmed}")`,
-                    `input('${trimmed}')`,
-                ];
-            }
+      // Both quote styles, and with or without the trailing space, so a
+      // student is graded on the prompt's wording rather than on which
+      // quote character they reached for.
+      function prompt_needles(prompt) {
+        const trimmed = prompt.trimEnd();
+        return [
+          `input("${prompt}")`,
+          `input('${prompt}')`,
+          `input("${trimmed}")`,
+          `input('${trimmed}')`,
+        ];
+      }
 
-            function build_criteria(results) {
-                return [
-                    {
-                        id: "input",
-                        name: "Input handling",
-                        points: 10,
-                        description:
-                            "Source calls input() with the exact prompt text from the handout.",
-                        type: "code",
-                        needles: PROMPTS.map(prompt_needles),
-                        mode: "all",
-                    },
-                    {
-                        id: "output",
-                        name: "Correct output",
-                        points: 20,
-                        description:
-                            "20 points split evenly across all examples, prorated by the % of lines that match exactly.",
-                        type: "output-diff",
-                        cases: CASES,
-                    },
-                    {
-                        id: "flake8",
-                        name: "flake8",
-                        points: 10,
-                        description:
-                            "−1 point per flake8 finding, down to a floor of 0.",
-                        type: "flake8",
-                        partial: true,
-                    },
-                ];
-            }
+      function build_criteria(results) {
+        return [
+          {
+            id: "input",
+            name: "Input handling",
+            points: 10,
+            description:
+              "Source calls input() with the exact prompt text from the handout.",
+            type: "code",
+            needles: PROMPTS.map(prompt_needles),
+            mode: "all",
+          },
+          {
+            id: "output",
+            name: "Correct output",
+            points: 20,
+            description:
+              "20 points split evenly across all examples, prorated by the % of lines that match exactly.",
+            type: "output-diff",
+            cases: CASES,
+          },
+          {
+            id: "flake8",
+            name: "flake8",
+            points: 10,
+            description: "−1 point per flake8 finding, down to a floor of 0.",
+            type: "flake8",
+            partial: true,
+          },
+        ];
+      }
 
-            // The right column only: w2p2.md fills the left, and the page
-            // carries its own footer below both.
-            grader_app.init({
-                filename: "w2-2.py",
-                title: "Submission",
-                subtitle: "Graded in this tab · nothing leaves your browser",
-                cases: CASES,
-                build_criteria,
-                max_auto_points: 40,
-                mount: "#grader",
-                handout: "w2p2.md",
-            });
-        </script>
-    </body>
+      // The right column only: w2p2.md fills the left, and the page
+      // carries its own footer below both.
+      grader_app.init({
+        filename: "w2-2.py",
+        title: "Submission",
+        subtitle: "Graded in this tab · nothing leaves your browser",
+        cases: CASES,
+        build_criteria,
+        max_auto_points: 40,
+        mount: "#grader",
+        handout: "w2p2.md",
+      });
+    </script>
+  </body>
 </html>

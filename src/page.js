@@ -27,6 +27,10 @@ import { escape_html } from "./html.js";
  * under the score, e.g. `"/ 45 auto"`), `drop_prompt` (the bold line in the
  * drop zone), `drop_hint` (the small line under it), `accept` (the file
  * input's `accept` attribute), and `footer`, which is omitted when absent.
+ *
+ * `editor_ids` is what turns the editor on: absent, the sheet is exactly what
+ * it was before, so a page that never asked for one carries none of its
+ * markup and none of its ids.
  */
 
 const DROP_HINT_DEFAULT = "or click to choose a file · runs entirely in your browser";
@@ -204,12 +208,57 @@ function header_html(options) {
     </header>`;
 }
 
+/**
+ * The editor block, emitted only for an assignment that asked for one.
+ *
+ * It sits above the drop zone rather than replacing it: a student who already
+ * wrote the file in their own editor should not have to paste it in, and one
+ * who writes it here still needs the drop zone's neighbour, the Grade button.
+ *
+ * The gutter is a sibling of the textarea rather than a background image
+ * because it has to stay aligned when the text scrolls, and `aria-hidden`
+ * keeps a screen reader from reading every line number aloud.
+ */
+function editor_html(options) {
+  const ids = options.editor_ids;
+  assert(ids != null, "editor_html: editor ids must be provided");
+  const filename = options.filename ?? "your program";
+  return `
+      <div class="editor-pane">
+        <div class="editor-head">
+          <span class="word">${escape_html(filename)}</span>
+          <span class="editor-actions">
+            <button id="${ids.reset}" class="ghost" type="button">Reset</button>
+            <button id="${ids.download}" class="ghost" type="button">Download</button>
+          </span>
+        </div>
+        <div class="editor">
+          <pre class="gutter" id="${ids.gutter}" aria-hidden="true">1</pre>
+          <textarea id="${ids.code}" spellcheck="false" autocapitalize="off"
+                    autocomplete="off" autocorrect="off" wrap="off"></textarea>
+        </div>
+
+        <div class="run-bar">
+          <button id="${ids.run_code}" type="button" disabled>Run</button>
+          <select id="${ids.case_select}" aria-label="Example to run against"></select>
+          <span class="status" id="${ids.run_status}"></span>
+        </div>
+
+        <label class="stdin-label" for="${ids.stdin}">Input, one line per prompt</label>
+        <textarea id="${ids.stdin}" class="stdin" spellcheck="false" rows="3"></textarea>
+
+        <div class="console" id="${ids.console}"></div>
+      </div>`;
+}
+
 function body_html(options) {
   const { ids } = options;
   const prompt = options.drop_prompt ?? "Drop your submission here";
   const hint = options.drop_hint ?? DROP_HINT_DEFAULT;
+  const editor = options.editor_ids != null ? editor_html(options) : "";
   return `
     <div class="body">
+      ${editor}
       <label class="drop" id="${ids.drop}">
         <strong>${escape_html(prompt)}</strong>
         <span>${escape_html(hint)}</span>

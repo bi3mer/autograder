@@ -14,7 +14,8 @@ import * as autograder from "../src/main.js";
 
 const EXPECTED_EXPORTS = [
   "AssertionError", "VERSION", "assert", "assert_array", "assert_range", "assert_string",
-  "assertions", "checks", "constants", "escape_html", "grader_app", "handout", "load_handout",
+  "assertions", "checks", "constants", "editor", "escape_html", "grader_app", "handout",
+  "load_handout",
   "markdown", "page", "py_runner", "render_markdown", "rubric", "unreachable",
 ].sort();
 
@@ -29,6 +30,8 @@ test("each namespace export carries the module's entry points", () => {
   assert.equal(typeof autograder.rubric.grade, "function");
   assert.equal(typeof autograder.checks.contains_set, "function");
   assert.equal(typeof autograder.checks.diff_lines, "function");
+  assert.equal(typeof autograder.editor.wire_editor, "function");
+  assert.equal(typeof autograder.editor.indent_selection, "function");
   assert.equal(typeof autograder.page.render_skeleton, "function");
   assert.equal(typeof autograder.markdown.render_markdown, "function");
   assert.equal(typeof autograder.handout.load_handout, "function");
