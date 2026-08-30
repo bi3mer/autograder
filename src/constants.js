@@ -66,3 +66,32 @@ export const FILENAME_CHARS_MAX = 255;
 
 /** Placeholder shown in a diff where one side has no line. */
 export const LINE_ABSENT = "∅";
+
+/**
+ * A handout, in bytes. An assignment statement is a page or two of prose; the
+ * ceiling sits far above that, so it fires on a wrong file rather than on real
+ * work.
+ */
+export const MARKDOWN_BYTES_MAX = 256 * 1024;
+
+export const MARKDOWN_LINE_COUNT_MAX = 10_000;
+
+/**
+ * How deep lists and blockquotes may nest. Each level recurses through the
+ * block scanner, so this is what bounds that recursion.
+ */
+export const MARKDOWN_LIST_DEPTH_MAX = 6;
+
+/** Backtick spans lifted out of one text run before the other inline rules. */
+export const MARKDOWN_CODE_SPAN_COUNT_MAX = 4096;
+
+export const MARKDOWN_TABLE_COLUMN_COUNT_MAX = 16;
+
+/** Tags counted by the output allowlist check. */
+export const MARKDOWN_TAG_COUNT_MAX = 20_000;
+
+/** A fence's info string, e.g. the `python` in ```python. */
+export const MARKDOWN_INFO_CHARS_MAX = 32;
+
+/** A handout's URL, as written in an assignment page's config. */
+export const HANDOUT_HREF_CHARS_MAX = 2048;

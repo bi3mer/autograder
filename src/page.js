@@ -11,8 +11,13 @@
  * only renders when the elements are absent.
  */
 
-import { assert, assert_string } from "./assert.js";
-import { NEEDLE_CHARS_MAX } from "./constants.js";
+import { assert, assert_array, assert_range, assert_string } from "./assert.js";
+import {
+  CRITERION_COUNT_MAX,
+  MANUAL_ROW_COUNT_MAX,
+  NEEDLE_CHARS_MAX,
+  POINTS_MAX,
+} from "./constants.js";
 import { escape_html } from "./html.js";
 
 /**
@@ -57,6 +62,126 @@ export function ensure_stylesheet(href) {
   document.head.appendChild(link);
   assert(document.head.contains(link), "ensure_stylesheet: link must be attached");
   return true;
+}
+
+/**
+ * An element, a CSS selector, or nothing at all (which means the body). Both
+ * `grader.init` and `load_handout` take a mount, so the resolution lives here
+ * rather than twice; `name` is the caller, so a bad selector names the call
+ * that carried it.
+ */
+export function resolve_mount(mount, name) {
+  assert(
+    typeof name === "string" && name.length > 0,
+    "resolve_mount: name must be a non-empty string",
+  );
+  if (mount == null) return document.body;
+  if (typeof mount === "string") {
+    const found = document.querySelector(mount);
+    assert(found != null, `${name}: no element matches the mount selector "${mount}"`);
+    return found;
+  }
+  assert(mount instanceof HTMLElement, `${name}: mount must be an element or a selector`);
+  return mount;
+}
+
+/** Heading the generated rubric sits under, inside the handout column. */
+const RUBRIC_HEADING_DEFAULT = "Rubric";
+
+/** 2.5 stays "2.5", and 10 stays "10" rather than becoming "10.0". */
+function points_text(points, name) {
+  assert_range(points, name, 0, POINTS_MAX);
+  return String(Math.round(points * 100) / 100);
+}
+
+function criterion_row_html(criterion, index) {
+  assert(criterion != null, `rubric_preview_html: criteria[${index}] must not be null`);
+  assert_string(criterion.name, `rubric_preview_html: criteria[${index}].name`, NEEDLE_CHARS_MAX);
+  const points = points_text(criterion.points, `rubric_preview_html: criteria[${index}].points`);
+  const description = criterion.description ?? "";
+  assert_string(
+    description,
+    `rubric_preview_html: criteria[${index}].description`,
+    NEEDLE_CHARS_MAX,
+  );
+  return `<tr><td>${escape_html(criterion.name)}</td>`
+    + `<td class="align-right">${points}</td>`
+    + `<td>${escape_html(description)}</td></tr>`;
+}
+
+/**
+ * A manual row carries its points as free text (`"manual / 5"`), so it cannot
+ * be added up and sits below the auto-graded total rather than inside it.
+ */
+function manual_row_html(row, index) {
+  assert(row != null, `rubric_preview_html: manual_rows[${index}] must not be null`);
+  assert_string(row.name, `rubric_preview_html: manual_rows[${index}].name`, NEEDLE_CHARS_MAX);
+  const score = row.score ?? "";
+  assert_string(score, `rubric_preview_html: manual_rows[${index}].score`, NEEDLE_CHARS_MAX);
+  const description = row.description ?? "";
+  return `<tr><td>${escape_html(row.name)}</td>`
+    + `<td class="align-right">${escape_html(score)}</td>`
+    + `<td>${escape_html(description)}</td></tr>`;
+}
+
+/**
+ * The rubric a student reads, built from the same `build_criteria` the grader
+ * scores with.
+ *
+ * A handout that writes its own point breakdown can promise points the grader
+ * does not award, and that drift is invisible until someone compares the two
+ * by hand. Generating the table removes the second copy: there is one source
+ * for what each row is worth, and it is the source the grading runs against.
+ *
+ * Takes `{ criteria, manual_rows, max_auto_points, heading }` and returns
+ * markup for the handout column, styled by the `.prose table` rules.
+ */
+export function rubric_preview_html(options) {
+  assert(
+    options != null && typeof options === "object",
+    "rubric_preview_html: options must be an object",
+  );
+  const criteria = assert_array(
+    options.criteria,
+    "rubric_preview_html: criteria",
+    CRITERION_COUNT_MAX,
+  );
+  const manual_rows = assert_array(
+    options.manual_rows ?? [],
+    "rubric_preview_html: manual_rows",
+    MANUAL_ROW_COUNT_MAX,
+  );
+  const heading = options.heading ?? RUBRIC_HEADING_DEFAULT;
+
+  let total = 0;
+  const rows = criteria.map((criterion, index) => {
+    total += criterion.points;
+    return criterion_row_html(criterion, index);
+  });
+  total = Math.round(total * 100) / 100;
+  // The denominator beside the score and the rows above it come from the same
+  // config, so a mismatch means a student is shown a total they cannot reach.
+  assert(
+    options.max_auto_points === undefined || total === options.max_auto_points,
+    `rubric_preview_html: criteria total ${total} does not match `
+      + `max_auto_points ${options.max_auto_points}`,
+  );
+  // The qualifier earns its place only when instructor-graded rows follow the
+  // total; without them "Total" is unambiguous and does not wrap the column.
+  const total_label = manual_rows.length > 0 ? "Total (auto-graded)" : "Total";
+  rows.push(
+    `<tr><td><strong>${escape_html(total_label)}</strong></td>`
+    + `<td class="align-right"><strong>${points_text(total, "rubric total")}</strong></td>`
+    + `<td></td></tr>`,
+  );
+  for (let index = 0; index < manual_rows.length; index++) {
+    rows.push(manual_row_html(manual_rows[index], index));
+  }
+
+  return `<h2>${escape_html(heading)}</h2>\n<table>\n`
+    + `<thead><tr><th>Criterion</th><th class="align-right">Points</th>`
+    + `<th>Description</th></tr></thead>\n`
+    + `<tbody>\n${rows.join("\n")}\n</tbody>\n</table>`;
 }
 
 function header_html(options) {

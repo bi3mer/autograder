@@ -165,3 +165,86 @@ footer {
 .links li { margin: 6px 0; }
 .links a { color: var(--text); }
 .links a:hover { color: var(--pass); }
+
+/* Two columns: the handout on the left, the grader on the right. An assignment
+   page opts in by wrapping both sections in .split; a page with no handout
+   leaves it out and keeps the single centred sheet. */
+.split {
+  max-width: 1180px;
+  margin: 0 auto;
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) minmax(0, 1fr);
+  gap: 44px;
+  align-items: start;
+}
+.split .sheet { max-width: none; margin: 0; }
+/* Nothing sits above the handout in its column, so it starts at the top. */
+.split .prose { padding-top: 0; }
+@media (max-width: 900px) {
+  .split { grid-template-columns: minmax(0, 1fr); gap: 32px; }
+}
+
+/* Handout prose, rendered from an assignment's markdown by src/markdown.js.
+   Every rule here is shared, so an assignment page carries only its layout. */
+.prose { font-size: 13px; padding-top: 24px; }
+.prose p { margin: 0 0 10px; }
+.prose ol, .prose ul { margin: 0 0 10px; padding-left: 20px; }
+.prose li { margin: 5px 0; }
+/* A nested list sits under its entry rather than floating a line away, and an
+   entry that grew a paragraph keeps the spacing of one that did not. */
+.prose li > ul, .prose li > ol { margin: 5px 0 0; }
+.prose li > p { margin: 0 0 6px; }
+.prose li > p:last-child { margin-bottom: 0; }
+.prose h1 { font-size: 24px; margin: 26px 0 10px; font-weight: 600; }
+.prose h1:first-child {
+  margin: 0 0 24px;
+  padding-bottom: 18px;
+  border-bottom: 1px solid var(--line);
+}
+.prose h2, .prose h3, .prose h4, .prose h5, .prose h6 {
+  font-size: 12px;
+  letter-spacing: 1.5px;
+  text-transform: uppercase;
+  color: var(--muted);
+  font-weight: 600;
+  margin: 26px 0 10px;
+}
+.prose h2:first-child { margin-top: 0; }
+.prose code {
+  background: #010409;
+  border: 1px solid var(--line);
+  border-radius: 4px;
+  padding: 1px 5px;
+  font-size: 12px;
+}
+.prose pre.io { margin: 8px 0 10px; }
+.prose pre.io code { background: none; border: 0; padding: 0; font-size: inherit; }
+.prose a { color: var(--pass); }
+.prose img { max-width: 100%; border-radius: 6px; margin: 8px 0; }
+.prose hr { border: 0; border-top: 1px solid var(--line); margin: 22px 0; }
+.prose blockquote {
+  margin: 0 0 10px;
+  padding: 2px 0 2px 14px;
+  border-left: 2px solid var(--line);
+  color: var(--muted);
+}
+.prose blockquote p:last-child { margin-bottom: 0; }
+.prose table {
+  width: 100%;
+  border-collapse: collapse;
+  margin: 0 0 10px;
+  font-size: 12px;
+}
+.prose th, .prose td {
+  border-bottom: 1px solid var(--line);
+  padding: 7px 10px 7px 0;
+  text-align: left;
+  vertical-align: top;
+}
+.prose th { color: var(--muted); font-weight: 600; }
+.prose .align-left { text-align: left; }
+.prose .align-center { text-align: center; }
+.prose .align-right { text-align: right; }
+
+/* A handout that failed to load says so where the prose would have been. */
+.handout-error { color: var(--fail); }

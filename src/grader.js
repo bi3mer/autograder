@@ -8,17 +8,21 @@
  */
 
 import { assert, assert_array, assert_range, assert_string } from "./assert.js";
+import { load_handout } from "./handout.js";
 import { escape_html } from "./html.js";
 import {
   default_styles_href,
   ensure_stylesheet,
   render_skeleton,
+  resolve_mount,
+  rubric_preview_html,
 } from "./page.js";
 import * as py_runner from "./pyrunner.js";
 import * as rubric from "./rubric.js";
 import {
   CRITERION_COUNT_MAX,
   FILENAME_CHARS_MAX,
+  HANDOUT_HREF_CHARS_MAX,
   MANUAL_ROW_COUNT_MAX,
   NEEDLE_CHARS_MAX,
   POINTS_MAX,
@@ -47,6 +51,14 @@ import {
  *   to `document.title`, the caption to `"/ <max_auto_points> auto"`, and the
  *   prompt to `"Drop <filename> here"`).
  * - `mount`: an element or a selector, defaulting to `document.body`.
+ * - `handout`: a markdown file to fetch and render beside the grader, either
+ *   `"w1p1.md"` or `{ href, mount, render_rubric }`. The mount defaults to
+ *   `"#handout"`, and is separate from the grader's, so a two-column page can
+ *   carry the problem statement on one side and the drop zone on the other.
+ *   `render_rubric` defaults to `true`: the rubric is generated from
+ *   `build_criteria` and appended under the handout, so the points a student
+ *   reads are the points the grader awards. Pass `false` for a handout that
+ *   writes its own.
  * - `styles_href`: another stylesheet, or `false` to link none. Defaults to
  *   `css/a1.css` beside this module.
  * - `element_ids`: overrides for any of `ELEMENT_IDS_DEFAULT`.
@@ -72,6 +84,29 @@ const ELEMENT_IDS_DEFAULT = {
   copy: "copy",
   copy_status: "copystatus",
 };
+
+/** Where a handout renders when the config names a file but no mount. */
+const HANDOUT_MOUNT_DEFAULT = "#handout";
+
+/**
+ * `handout: "w1p1.md"` is shorthand for the full `{ href, mount }` form, which
+ * is what an assignment page wants nine times in ten.
+ */
+function handout_options(handout) {
+  if (handout == null) return null;
+  if (typeof handout === "string") {
+    return { href: handout, mount: HANDOUT_MOUNT_DEFAULT, render_rubric: true };
+  }
+  assert(
+    typeof handout === "object",
+    "config.handout must be a path or a { href, mount } object",
+  );
+  return {
+    href: handout.href,
+    mount: handout.mount ?? HANDOUT_MOUNT_DEFAULT,
+    render_rubric: handout.render_rubric ?? true,
+  };
+}
 
 const SYNTAX_ZERO_MESSAGE =
   "Syntax error — score is zero per assignment policy.";
@@ -132,6 +167,15 @@ function check_config(config) {
   );
   assert_string(config.filename, "config.filename", FILENAME_CHARS_MAX);
   assert(config.filename.length > 0, "config.filename must not be empty");
+  const handout = handout_options(config.handout);
+  if (handout !== null) {
+    assert_string(handout.href, "config.handout.href", HANDOUT_HREF_CHARS_MAX);
+    assert(handout.href.length > 0, "config.handout.href must not be empty");
+    assert(
+      typeof handout.render_rubric === "boolean",
+      "config.handout.render_rubric must be a boolean",
+    );
+  }
   const cases = assert_array(config.cases, "config.cases", TEST_CASE_COUNT_MAX);
   assert(cases.length > 0, "config.cases must contain at least one case");
   for (let index = 0; index < cases.length; index++) {
@@ -468,23 +512,6 @@ async function boot(session) {
   elements.run.disabled = session.source == null;
 }
 
-function resolve_mount(mount) {
-  if (mount == null) return document.body;
-  if (typeof mount === "string") {
-    const found = document.querySelector(mount);
-    assert(
-      found != null,
-      `init: no element matches the mount selector "${mount}"`,
-    );
-    return found;
-  }
-  assert(
-    mount instanceof HTMLElement,
-    "init: mount must be an element or a selector",
-  );
-  return mount;
-}
-
 /**
  * Detection is by the grade button: a hand-written page that carries the
  * elements keeps them, and everything else gets the generated skeleton, so an
@@ -507,7 +534,7 @@ function ensure_page(config, ids) {
     drop_hint: config.drop_hint,
     accept: config.accept,
     footer: config.footer,
-    mount: resolve_mount(config.mount),
+    mount: resolve_mount(config.mount, "init"),
   });
   assert(
     document.getElementById(ids.run) != null,
@@ -542,6 +569,25 @@ export function init(config) {
 
   wire_file_input(session);
   wire_buttons(session);
+  // Fetched rather than awaited: the prose and the Python runtime load in
+  // parallel, and a handout that never arrives must not hold up grading.
+  const handout = handout_options(config.handout);
+  if (handout !== null) {
+    const mount = resolve_mount(handout.mount, "init");
+    // The rubric is built here rather than in the callback below, so a rubric
+    // that cannot be built fails in front of the instructor now instead of
+    // disappearing into a rejected promise after the fetch returns.
+    const rubric = handout.render_rubric
+      ? rubric_preview_html({
+        criteria: config.build_criteria([]),
+        manual_rows: config.manual_rows ?? [],
+        max_auto_points: config.max_auto_points,
+      })
+      : "";
+    void load_handout({ href: handout.href, mount }).then(() => {
+      if (rubric !== "") mount.insertAdjacentHTML("beforeend", rubric);
+    });
+  }
   void boot(session);
   assert(
     session.source === null,

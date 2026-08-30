@@ -21,6 +21,8 @@ export * as assertions from "./assert.js";
 export * as checks from "./checks.js";
 export * as constants from "./constants.js";
 export * as grader_app from "./grader.js";
+export * as handout from "./handout.js";
+export * as markdown from "./markdown.js";
 export * as page from "./page.js";
 export * as py_runner from "./pyrunner.js";
 export * as rubric from "./rubric.js";
@@ -29,6 +31,8 @@ export {
   assert, assert_array, assert_range, assert_string, AssertionError, unreachable,
 } from "./assert.js";
 export { escape_html } from "./html.js";
+export { load_handout } from "./handout.js";
+export { render_markdown } from "./markdown.js";
 
 /** Kept in step with `package.json`. */
 export const VERSION = "0.1.0";

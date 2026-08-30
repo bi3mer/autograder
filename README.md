@@ -11,29 +11,6 @@ There is no build step and no dependencies. The browser loads `src/` as ES
 modules, GitHub Pages serves the repository tree as it stands, and the tests
 are plain Node, so what runs in production is the source you are reading.
 
-## Layout
-
-| Path           | What lives there                                         |
-| -------------- | -------------------------------------------------------- |
-| `src/`         | The grading engine, as plain ES modules                  |
-| `css/`         | Page styles shared by assignment pages                   |
-| `cs230/`       | One HTML page per assignment: test cases and rubric only |
-| `index.html`   | Site root: a placeholder page on the shared dark theme   |
-| `test/`        | One `node --test` file per engine module                 |
-| `package.json` | Three scripts and `"type": "module"`; no dependencies    |
-
-`src/main.js` re-exports the whole engine, and eight modules sit behind it.
-`assert.js` provides the assertions, which stay enabled everywhere, and
-`constants.js` holds every limit they check against. `checks.js` does
-substring matching and line diffing over plain strings, and `html.js` escapes
-whatever reaches the page. `pyrunner.js` loads Pyodide and runs one submission
-against canned stdin. `rubric.js` scores an array of criterion objects.
-`page.js` generates the page markup, and `grader.js` wires everything to the
-DOM.
-
-Nothing in `src/` imports anything outside `src/`, so a page needs those nine
-files and no package manager.
-
 ## Using the Engine in an HTML Page
 
 Pyodide's script tag, then one module script that imports `src/main.js` and
@@ -93,10 +70,77 @@ elements carry the ids `status`, `run`, `drop`, `file`, `filename`, `rubric`,
 `element_ids` can override. A hand-written page missing one of them fails an
 assertion at startup rather than throwing `null` errors later.
 
+## Handouts in Markdown
+
+A problem statement is prose, so it is written as prose. Point an assignment
+page at a `.md` file and the browser fetches it, renders it, and puts the markup
+in a mount element:
+
+```js
+grader_app.init({
+  filename: "w1-1.py",
+  handout: { href: "w1p1.md", mount: "#handout" },
+  cases: CASES,
+  build_criteria,
+  max_auto_points: 40,
+});
+```
+
+Every page under `cs230/` is wired this way: the handout fills the left column
+and the grader the right, with `.split` in `css/a1.css` carrying the layout.
+
+`handout: "w1p1.md"` is shorthand for the same thing mounted at `#handout`. The
+path resolves against the page rather than against `src/`, so the markdown sits
+beside the HTML that names it. The handout's mount is separate from the
+grader's, which is what lets `cs230/w1p1.html` carry the statement in one column
+and the drop zone in the other. A page with no grader on it can import
+`load_handout` and call it directly.
+
+### The Rubric Generates Itself
+
+Under the handout, the grader appends a rubric table built from the same
+`build_criteria` it scores with: one row per criterion, the auto-graded total,
+then any `manual_rows` with their free-text scores below it. A handout that
+spells its own point breakdown out in prose can promise points the grader does
+not award, and that drift stays invisible until someone compares the two by
+hand. Generating the table removes the second copy.
+
+The criteria are summed rather than trusted, and the sum is asserted against
+`max_auto_points`. A page whose rows come to 45 while the score reads `/ 50`
+fails at startup rather than showing students a total they cannot reach.
+
+Pass `handout: { href: "w1p1.md", render_rubric: false }` for a handout that
+writes its own; it defaults to `true`.
+
+The parser covers the subset a handout uses: ATX headings, paragraphs, nested
+ordered and unordered lists, fenced code blocks, blockquotes, horizontal rules,
+pipe tables with an alignment row, `code`, `**bold**`, `*italic*`, links,
+images, and hard line breaks. A fence renders as `<pre class="io">`, the class
+the terminal transcripts already use, so it lands on styling that exists.
+
+Only a leading tab is expanded to spaces, since indentation is what nests a
+list. A tab further along a line is content and survives, which is what lets
+`cs230/a1.md` show the tab-separated output that assignment expects.
+
+Reference links, setext headings, indented code blocks, autolinks, HTML blocks,
+and lazy continuation inside a list item are all absent, each being a class of
+surprise a handout does not need. Unknown syntax is never an error, because
+markdown has none; it renders as the literal text it is.
+
+Raw HTML in a handout renders as visible text. Every run of text is escaped
+before any inline rule reaches it, and `render_markdown` then checks its own
+output against a fixed tag allowlist, so a `<script>` written in a `.md` file
+cannot become a tag. A `javascript:` or `data:` link target renders as the text
+the author typed rather than as an anchor.
+
+A handout that fails to load says why, in the space the prose would have
+filled, and the grader beside it keeps working.
+
 ## Adding an Assignment
 
 Copy `cs230/a1.html`, then replace two things: `CASES` (the stdin and expected
-output for each example in the handout) and `build_criteria` (the rubric).
+output for each example in the handout) and `build_criteria` (the rubric). The
+problem statement goes in a `.md` file beside it, named by `handout`.
 Everything else is shared, and the page is about a dozen lines around that
 data. Criterion types are `code`, `output`, `code-regex`, `output-diff`,
 `flake8`, and `custom`; the comment above `round_points` in `src/rubric.js`
@@ -112,12 +156,13 @@ point per finding, with a floor of zero.
 
 ```
 npm run serve       # http://localhost:8000/cs230/a1.html
-npm test            # 106 tests, straight from a clone: nothing to install
+npm test            # 170 tests, straight from a clone: nothing to install
 ```
 
-Serve over HTTP rather than opening a page directly: ES modules and Pyodide's
-WebAssembly runtime are both fetched, and a `file://` page cannot do either.
-Any static server works; `npm run serve` is Python's, because Pyodide already
+Serve over HTTP rather than opening a page directly: ES modules, Pyodide's
+WebAssembly runtime, and an assignment's markdown handout are all fetched, and a
+`file://` page cannot do any of them. Any static server works; `npm run serve`
+is Python's, because Pyodide already
 assumes Python is around.
 
 `package.json` carries the three scripts and `"type": "module"`, which is
@@ -130,7 +175,8 @@ The tests run on Node's own test runner, one file per module: `test_checks.js`
 covers `src/checks.js`, `test_rubric.js` covers `src/rubric.js`, and so on.
 `test_pyrunner.js` drives the runner against a fake interpreter that records
 the Python it is handed, which covers the encoding and the state guards
-without WebAssembly.
+without WebAssembly. `test_markdown.js` covers the parser in full, since it is
+a pure function from string to string.
 
 The tests cover the grading engine, which is where a wrong score comes from.
 They do not cover the DOM: a test double for the browser is a second
