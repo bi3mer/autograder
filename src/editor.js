@@ -5,7 +5,8 @@
  * instead of indenting, and Enter drops the cursor back to column zero, so a
  * student fights the box on every line of a nested block. This module supplies
  * the four behaviours that fix that, plus a line-number gutter, so an error
- * reported at line 12 names something a student can see.
+ * reported at line 12 names something a student can see, and it drives the
+ * colour layer `highlight.js` renders behind the text.
  *
  * The pure half is separated from the DOM half deliberately, the way `page.js`
  * splits `default_styles_href` from `render_skeleton`: the indent arithmetic is
@@ -21,6 +22,7 @@
  */
 
 import { assert, assert_range, assert_string } from "./assert.js";
+import { highlight_html } from "./highlight.js";
 import {
   DRAFT_BYTES_MAX,
   EDITOR_INDENT_SPACES,
@@ -210,16 +212,6 @@ export function save_draft(key, text) {
   }
 }
 
-export function clear_draft(key) {
-  assert_string(key, "clear_draft: key", HANDOUT_HREF_CHARS_MAX);
-  try {
-    globalThis.localStorage?.removeItem(key);
-    return true;
-  } catch {
-    return false;
-  }
-}
-
 /**
  * Apply an edit to a live textarea.
  *
@@ -247,10 +239,16 @@ function apply_edit(textarea, edit) {
 /**
  * Wire a textarea and its gutter into an editor.
  *
- * Takes `{ textarea, gutter }` and the hooks `{ on_change, on_run }`, and
- * returns `{ get_value, set_value, focus_line }`. The markup itself comes from
- * `page.js`, the same way the grader's does, so a page that writes its own
+ * Takes `{ textarea, gutter, highlight }` and the hooks `{ on_change, on_run }`,
+ * and returns `{ get_value, set_value, focus_line }`. The markup itself comes
+ * from `page.js`, the same way the grader's does, so a page that writes its own
  * keeps it.
+ *
+ * `highlight` is the `<pre>` behind the textarea, and it is optional: without
+ * one the editor is exactly what it was, a textarea in one colour. With one,
+ * every path that changes the text redraws it, and both scroll offsets are
+ * copied across, because the two layers only read as one while they agree to
+ * the pixel.
  */
 export function wire_editor(elements, hooks = {}) {
   assert(elements != null && typeof elements === "object", "wire_editor: elements required");
@@ -258,21 +256,53 @@ export function wire_editor(elements, hooks = {}) {
   assert(elements.gutter != null, "wire_editor: a gutter is required");
   assert(hooks != null && typeof hooks === "object", "wire_editor: hooks must be an object");
   const { textarea, gutter } = elements;
+  const highlight = elements.highlight ?? null;
   const on_change = hooks.on_change ?? (() => {});
   const on_run = hooks.on_run ?? (() => {});
   assert(typeof on_change === "function", "wire_editor: on_change must be a function");
   assert(typeof on_run === "function", "wire_editor: on_run must be a function");
 
+  /**
+   * Both layers follow the textarea rather than scrolling on their own.
+   *
+   * They move by transform, not by `scrollTop`. A textarea showing a
+   * horizontal scrollbar has 15px less height to scroll through than a layer
+   * that shows none, so at the bottom of a file with one long line a scrolled
+   * layer stops short and leaves its numbers and colours most of a line above
+   * the text. A transform is not clamped to a scrollable extent, so the two
+   * cannot drift apart.
+   */
+  function sync_scroll() {
+    const x = textarea.scrollLeft;
+    const y = textarea.scrollTop;
+    gutter.style.transform = `translateY(${-y}px)`;
+    // Long lines do not wrap, so the highlight has to track sideways too.
+    if (highlight !== null) highlight.style.transform = `translate(${-x}px, ${-y}px)`;
+  }
+
+  /**
+   * Redraw both layers and tell the page.
+   *
+   * Past the gutter's ceiling the numbers stop rather than assert. An
+   * assertion thrown here would be thrown inside an input handler, which
+   * abandons the rest of this function: both layers would keep showing the
+   * previous buffer, `on_change` would never fire, and every further
+   * keystroke would throw again with nothing on screen to say why. The text
+   * keeps its colours, so the buffer stays readable while it is too long to
+   * number, and `on_change` still runs so the page can say so.
+   */
   function sync() {
-    gutter.textContent = gutter_text(textarea.value);
-    on_change(textarea.value);
+    const text = textarea.value;
+    const numbered = text.split("\n").length <= EDITOR_LINE_COUNT_MAX;
+    gutter.textContent = numbered ? gutter_text(text) : "";
+    if (highlight !== null) highlight.innerHTML = highlight_html(text);
+    sync_scroll();
+    on_change(text);
   }
 
   textarea.addEventListener("input", sync);
   // The gutter is a separate element, so it has to be told where the text went.
-  textarea.addEventListener("scroll", () => {
-    gutter.scrollTop = textarea.scrollTop;
-  });
+  textarea.addEventListener("scroll", sync_scroll);
 
   textarea.addEventListener("keydown", (event) => {
     const { value, selectionStart, selectionEnd } = textarea;
@@ -312,7 +342,7 @@ export function wire_editor(elements, hooks = {}) {
       // Roughly centre the line rather than leaving it against the top edge.
       const line_height = textarea.scrollHeight / Math.max(1, textarea.value.split("\n").length);
       textarea.scrollTop = Math.max(0, (line - 1) * line_height - textarea.clientHeight / 2);
-      gutter.scrollTop = textarea.scrollTop;
+      sync_scroll();
     },
   };
   sync();

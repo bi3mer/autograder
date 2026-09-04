@@ -218,6 +218,20 @@ function header_html(options) {
  * The gutter is a sibling of the textarea rather than a background image
  * because it has to stay aligned when the text scrolls, and `aria-hidden`
  * keeps a screen reader from reading every line number aloud.
+ *
+ * The highlight layer is the same trick again: a `<pre>` under a textarea
+ * whose own text is transparent, carrying the coloured copy `highlight.js`
+ * renders. It is `aria-hidden` for the same reason the gutter is, since the
+ * textarea above it holds the real text a screen reader should read.
+ *
+ * Each layer is two elements, and the split is what keeps them aligned. The
+ * `<pre>` is a fixed window that clips, and the `<code>` inside it is what
+ * moves, by a transform `editor.js` sets from the textarea's scroll offsets.
+ * Scrolling the window instead would clamp: a textarea with a horizontal
+ * scrollbar has 15px less room to scroll in than a layer without one, so the
+ * bottom of a file with one long line would leave the numbers and the colours
+ * most of a line above the text they belong to. A transform has no such
+ * ceiling.
  */
 function editor_html(options) {
   const ids = options.editor_ids;
@@ -228,14 +242,16 @@ function editor_html(options) {
         <div class="editor-head">
           <span class="word">${escape_html(filename)}</span>
           <span class="editor-actions">
-            <button id="${ids.reset}" class="ghost" type="button">Reset</button>
             <button id="${ids.download}" class="ghost" type="button">Download</button>
           </span>
         </div>
         <div class="editor">
-          <pre class="gutter" id="${ids.gutter}" aria-hidden="true">1</pre>
-          <textarea id="${ids.code}" spellcheck="false" autocapitalize="off"
-                    autocomplete="off" autocorrect="off" wrap="off"></textarea>
+          <pre class="gutter" aria-hidden="true"><code id="${ids.gutter}">1</code></pre>
+          <div class="code-wrap">
+            <pre class="highlight" aria-hidden="true"><code id="${ids.highlight}"></code></pre>
+            <textarea id="${ids.code}" spellcheck="false" autocapitalize="off"
+                      autocomplete="off" autocorrect="off" wrap="off"></textarea>
+          </div>
         </div>
 
         <div class="run-bar">

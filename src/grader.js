@@ -25,6 +25,7 @@ import * as py_runner from "./pyrunner.js";
 import * as rubric from "./rubric.js";
 import {
   CRITERION_COUNT_MAX,
+  EDITOR_LINE_COUNT_MAX,
   FILENAME_CHARS_MAX,
   HANDOUT_HREF_CHARS_MAX,
   MANUAL_ROW_COUNT_MAX,
@@ -64,11 +65,11 @@ import {
  *   `build_criteria` and appended under the handout, so the points a student
  *   reads are the points the grader awards. Pass `false` for a handout that
  *   writes its own.
- * - `editor`: `true` for an in-page editor, or `{ starter, starter_href,
- *   download }`. Absent or `false` leaves the page exactly as it was: no
- *   editor markup, no editor ids, no behaviour change. With one, the buffer
- *   is what gets graded, a dropped file lands in it, and Run executes it
- *   against one example without spending a grading run.
+ * - `editor`: `true` for an in-page editor, or `{ download }`. Absent or
+ *   `false` leaves the page exactly as it was: no editor markup, no editor
+ *   ids, no behaviour change. With one, the buffer is what gets graded, a
+ *   dropped file lands in it, and Run executes it against one example without
+ *   spending a grading run.
  * - `styles_href`: another stylesheet, or `false` to link none. Defaults to
  *   `css/a1.css` beside this module.
  * - `element_ids`: overrides for any of `ELEMENT_IDS_DEFAULT`.
@@ -104,13 +105,13 @@ const ELEMENT_IDS_DEFAULT = {
 const EDITOR_IDS_DEFAULT = {
   code: "code",
   gutter: "gutter",
+  highlight: "highlight",
   run_code: "runcode",
   run_status: "runstatus",
   case_select: "caseselect",
   stdin: "stdin",
   console: "console",
   download: "download",
-  reset: "reset",
 };
 
 /** Where a handout renders when the config names a file but no mount. */
@@ -143,16 +144,12 @@ function handout_options(handout) {
  */
 function editor_options(config_editor) {
   if (config_editor == null || config_editor === false) return null;
-  if (config_editor === true) return { starter: "", starter_href: "", download: true };
+  if (config_editor === true) return { download: true };
   assert(
     typeof config_editor === "object",
     "config.editor must be true, false, or an options object",
   );
-  return {
-    starter: config_editor.starter ?? "",
-    starter_href: config_editor.starter_href ?? "",
-    download: config_editor.download ?? true,
-  };
+  return { download: config_editor.download ?? true };
 }
 
 const SYNTAX_ZERO_MESSAGE =
@@ -211,19 +208,23 @@ function resolve_elements(ids) {
  * Resolved only when the assignment asked for an editor, so the ids stay
  * optional. A page that supplies its own markup still has to carry all of
  * them: half an editor is worse than none.
+ *
+ * The highlight layer is the one exception, and it is looked up rather than
+ * required: nothing is read back from it and nothing depends on it, so a page
+ * written before it existed keeps an editor that works, in one colour.
  */
 function resolve_editor_elements(ids) {
   assert(ids != null && typeof ids === "object", "resolve_editor_elements: ids must be an object");
   const elements = {
     code: require_element(ids.code),
     gutter: require_element(ids.gutter),
+    highlight: document.getElementById(ids.highlight),
     run_code: require_element(ids.run_code),
     run_status: require_element(ids.run_status),
     case_select: require_element(ids.case_select),
     stdin: require_element(ids.stdin),
     console: require_element(ids.console),
     download: require_element(ids.download),
-    reset: require_element(ids.reset),
   };
   assert(
     Object.keys(elements).length === Object.keys(ids).length,
@@ -250,8 +251,6 @@ function check_config(config) {
   }
   const editor = editor_options(config.editor);
   if (editor !== null) {
-    assert_string(editor.starter, "config.editor.starter", SOURCE_BYTES_MAX);
-    assert_string(editor.starter_href, "config.editor.starter_href", HANDOUT_HREF_CHARS_MAX);
     assert(
       typeof editor.download === "boolean",
       "config.editor.download must be a boolean",
@@ -520,33 +519,16 @@ function download_source(session) {
   URL.revokeObjectURL(url);
 }
 
-/** A draft beats the starter: it is the work the student came back for. */
-async function initial_source(session) {
+/**
+ * What the editor opens with: the draft, or nothing.
+ *
+ * A student writes the program, so an empty box is the honest starting point.
+ * The one thing worth restoring is their own work from last time.
+ */
+function initial_source(session) {
   assert(session != null, "initial_source: session must not be null");
   const draft = editor_box.load_draft(session.draft_key);
-  if (draft != null && draft !== "") return draft;
-  return await starter_source(session);
-}
-
-/**
- * A starter file is fetched rather than inlined so it can live beside the
- * handout as real Python. A fetch that fails leaves an empty editor and says
- * so on the status line, because an assignment is still doable without it.
- */
-async function starter_source(session) {
-  const { starter, starter_href } = session.editor_config;
-  if (starter_href === "") return starter;
-  try {
-    const response = await fetch(new URL(starter_href, document.baseURI).href);
-    if (!response.ok) {
-      throw new Error(`the server answered ${response.status} ${response.statusText}`.trim());
-    }
-    return await response.text();
-  } catch (error) {
-    session.editor_elements.run_status.textContent =
-      `Could not load the starter file: ${reason_for(error)}`;
-    return starter;
-  }
+  return draft ?? "";
 }
 
 /** Fill the picker from the rubric's own examples, and prime the stdin box. */
@@ -572,11 +554,20 @@ function wire_editor_pane(session) {
   const elements = session.editor_elements;
 
   session.editor = editor_box.wire_editor(
-    { textarea: elements.code, gutter: elements.gutter },
+    { textarea: elements.code, gutter: elements.gutter, highlight: elements.highlight },
     {
       on_change: (text) => {
         if (text.length > SOURCE_BYTES_MAX) {
           elements.run_status.textContent = "That is too much code to grade.";
+          return;
+        }
+        // The buffer is past what the gutter can number, so it is not a
+        // submission yet. Said here because the editor cannot say it: pasting
+        // is the only way to reach this, since a dropped file is turned away
+        // by `accept_file` before it lands.
+        if (text.split("\n").length > EDITOR_LINE_COUNT_MAX) {
+          elements.run_status.textContent =
+            `That is over ${EDITOR_LINE_COUNT_MAX} lines, which is more than the editor can number.`;
           return;
         }
         session.source = text;
@@ -605,15 +596,7 @@ function wire_editor_pane(session) {
   elements.download.addEventListener("click", () => download_source(session));
   if (!session.editor_config.download) elements.download.style.display = "none";
 
-  elements.reset.addEventListener("click", () => {
-    if (!globalThis.confirm("Replace what you have written with the starter code?")) return;
-    void starter_source(session).then((text) => {
-      set_editor_source(session, text);
-      editor_box.clear_draft(session.draft_key);
-    });
-  });
-
-  void initial_source(session).then((text) => set_editor_source(session, text));
+  set_editor_source(session, initial_source(session));
 }
 
 function reset_output(session) {
@@ -631,6 +614,30 @@ function reset_output(session) {
 }
 
 /**
+ * Whether a dropped file may take the buffer over.
+ *
+ * The drop zone and the editor write to the same submission, and the file
+ * wins, so a student who has written something is asked first. Nothing else
+ * in the editor destroys work this way: Tab and Enter go through
+ * `execCommand` precisely so the browser's undo history survives them, and a
+ * dropped file cannot be undone at all. The debounced draft save then follows
+ * it into `localStorage`, so a reload does not bring the work back either.
+ *
+ * A blank buffer is nothing to lose, and a page without an editor has no
+ * buffer at all. Neither asks.
+ */
+function may_replace_buffer(session, filename) {
+  assert(session != null, "may_replace_buffer: session must not be null");
+  assert(typeof filename === "string", "may_replace_buffer: filename must be a string");
+  if (session.editor == null) return true;
+  if (session.editor.get_value().trim() === "") return true;
+  return globalThis.confirm(
+    `Replace what you have written with ${filename}?`
+    + " Your code will be gone, and this cannot be undone.",
+  );
+}
+
+/**
  * A file the browser cannot read, or one too large to be a Python program,
  * leaves the previous submission in place and says why on the status line.
  */
@@ -638,6 +645,12 @@ async function accept_file(session, file) {
   assert(session != null, "accept_file: session must not be null");
   if (file == null) return;
   const { config, elements } = session;
+
+  // Asked before the file is read, so a student who says no waits for nothing.
+  if (!may_replace_buffer(session, file.name)) {
+    elements.status.textContent = "Kept what you had written.";
+    return;
+  }
 
   let text;
   try {
@@ -648,6 +661,16 @@ async function accept_file(session, file) {
   }
   if (text.length > SOURCE_BYTES_MAX) {
     elements.status.textContent = `${file.name} is too large to grade (${text.length} bytes).`;
+    return;
+  }
+  // The editor's gutter numbers a bounded number of lines and asserts on more,
+  // so a file it cannot display is turned away here rather than throwing three
+  // calls deeper. A wrong file — a spreadsheet, a log — is how this is reached,
+  // and it stays under the byte ceiling while being far over this one.
+  const line_count = text.split("\n").length;
+  if (session.editor != null && line_count > EDITOR_LINE_COUNT_MAX) {
+    elements.status.textContent =
+      `${file.name} has ${line_count} lines; the editor shows at most ${EDITOR_LINE_COUNT_MAX}.`;
     return;
   }
 
@@ -769,6 +792,9 @@ function wire_file_input(session) {
   elements.file.addEventListener("change", (event) => {
     const input = event.target;
     void accept_file(session, input.files?.[0]);
+    // Cleared so that choosing the same file again still fires `change`. The
+    // File itself is already in hand, and outlives the input's list.
+    input.value = "";
   });
   for (const event_name of ["dragenter", "dragover"]) {
     elements.drop.addEventListener(event_name, (event) => {
@@ -881,8 +907,9 @@ export function init(config) {
   // Everything one wired-up page owns. Passing this session explicitly,
   // rather than closing over a pile of `let`s, keeps every handler a
   // top-level function small enough to read in one screen. `source` is null
-  // until a submission is chosen, and `grading` rejects re-entry while a run
-  // is in flight.
+  // until a submission is chosen, which on an editor page happens as the
+  // editor is wired: its buffer is the submission, empty or restored from a
+  // draft. `grading` rejects re-entry while a run is in flight.
   const session = {
     config,
     elements: resolve_elements(ids),
@@ -925,7 +952,7 @@ export function init(config) {
   }
   void boot(session);
   assert(
-    session.source === null,
-    "init: no submission may be loaded before the student picks one",
+    editor_config === null ? session.source === null : typeof session.source === "string",
+    "init: without an editor, no submission may be loaded before the student picks one",
   );
 }

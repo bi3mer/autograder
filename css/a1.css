@@ -277,6 +277,7 @@ footer {
   resize: vertical;
 }
 .editor .gutter,
+.editor .highlight,
 .editor textarea {
   font-family: inherit;
   font-size: 12.5px;
@@ -285,6 +286,16 @@ footer {
   margin: 0;
   border: 0;
   background: none;
+}
+/* Each layer is a window that clips and a block inside it that moves. The
+   window never scrolls; editor.js translates the block. */
+.editor .gutter code,
+.editor .highlight code {
+  display: block;
+  font: inherit;
+  background: none;
+  padding: 0;
+  border: 0;
 }
 .editor .gutter {
   color: var(--muted);
@@ -297,17 +308,56 @@ footer {
   border-right: 1px solid var(--line);
   background: var(--panel);
 }
-.editor textarea {
+
+/* The textarea and the coloured copy behind it are stacked, so they need a
+   positioned box of their own rather than a slot in the editor's flex row. */
+.editor .code-wrap {
+  position: relative;
   flex: 1;
-  color: var(--text);
+  min-width: 0;
+}
+.editor .highlight,
+.editor textarea {
+  position: absolute;
+  inset: 0;
   padding-left: 12px;
   padding-right: 12px;
+  white-space: pre;
+  tab-size: 4;
+  overflow-wrap: normal;
+  word-break: normal;
+}
+/* Behind the textarea, and scrolled by it rather than by the wheel: a scroll
+   of its own would slide the colour off the text. */
+.editor .highlight {
+  color: var(--text);
+  overflow: hidden;
+  pointer-events: none;
+  user-select: none;
+}
+.editor textarea {
+  /* The text itself is drawn by the layer below; the textarea keeps the
+     caret, the selection, and every behaviour a real textarea has. */
+  color: transparent;
+  -webkit-text-fill-color: transparent;
+  caret-color: var(--text);
   resize: none;
   outline: none;
-  white-space: pre;
   overflow: auto;
-  tab-size: 4;
 }
+/* Opaque, this would paint over the colours instead of marking them. */
+.editor textarea::selection { background: rgba(88,166,255,0.32); }
+
+/* One colour per token kind from highlight.js. Chosen against #010409 and
+   kept close to the palette the rest of the sheet already uses. */
+.editor .highlight .tok-comment { color: #8b949e; font-style: italic; }
+.editor .highlight .tok-string { color: #a5d6ff; }
+.editor .highlight .tok-number { color: #f0883e; }
+.editor .highlight .tok-keyword { color: #ff7b72; }
+.editor .highlight .tok-builtin { color: #79c0ff; }
+.editor .highlight .tok-def { color: #d2a8ff; }
+.editor .highlight .tok-decorator { color: #d2a8ff; }
+.editor .highlight .tok-op { color: #ff7b72; }
 
 .run-bar { display: flex; gap: 10px; align-items: center; margin: 12px 0 0; }
 .run-bar button { padding: 8px 16px; }

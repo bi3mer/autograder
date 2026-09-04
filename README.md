@@ -150,15 +150,14 @@ grader_app.init({
   cases: CASES,
   build_criteria,
   max_auto_points: 40,
-  editor: { starter_href: "w2p2-starter.py" },
+  editor: true,
 });
 ```
 
-`editor: true` is shorthand for the defaults. The full form takes `starter`
-(literal text), `starter_href` (a `.py` file fetched beside the page, which is
-what most assignments want, since a starter you can open and lint beats one
-buried in a string), and `download`. `cs230/w2p2.html` is the page that uses it;
-everything else passes `editor: false` and is untouched.
+`editor: true` is shorthand for the defaults, and the full form takes one
+option, `download`. There is no starter file: the editor opens empty, because
+writing the program from nothing is the assignment. `cs230/w2p2.html` is the
+page that uses it; everything else passes `editor: false` and is untouched.
 
 **Run is not Grade.** Grade does what it always did: every example, the whole
 rubric, a copyable summary. Run executes the buffer once against one example and
@@ -178,13 +177,52 @@ and Download writes it back out under `config.filename`, because students still
 upload the real file. Drafts save to `localStorage` behind a debounce, keyed by
 page path, so a refresh does not cost an afternoon.
 
+A drop over a buffer that already has code asks first. The drop zone and the
+editor write to the same submission and the file wins, and that overwrite is the
+one thing in the editor a student cannot undo: `set_value` assigns
+`textarea.value`, which clears the browser's undo history, and the debounced
+save then follows the file into `localStorage`. A blank buffer is nothing to
+lose and is replaced without a word; a page with no editor never asks, because
+it has no buffer to lose.
+
 `src/editor.js` is a textarea with the four behaviours that make one usable for
 Python: Tab and Shift+Tab indent by four instead of moving focus, Enter carries
 the indent and steps in after a line ending in `:`, a gutter numbers the lines,
 and Ctrl+Enter runs. Edits go through `execCommand("insertText")`, deprecated and
 used deliberately: it is the only way to change a textarea that leaves the
-browser's undo history intact. There is no syntax highlighting, which would mean
-a CodeMirror dependency and the build step this repository does not have.
+browser's undo history intact.
+
+### Syntax Highlighting
+
+The colour comes from `src/highlight.js`, which is a hundred lines and no
+dependency. A textarea paints one colour, so the editor draws the source twice:
+a `<pre>` holds the highlighted copy, and the textarea sits on top with its own
+text transparent and its caret and selection intact. The layers read as one only
+while they agree character for character, so `tokenize_python` asserts that its
+tokens concatenate back to the source exactly, and `test_highlight.js` checks
+that property over docstrings, unterminated strings, and escaped quotes.
+
+The gutter and the highlight follow the textarea by transform rather than by
+`scrollTop`, and each is a `<pre>` window clipping a `<code>` block that moves
+inside it. A scrolled layer clamps: a textarea showing a horizontal scrollbar
+has 15px less height to scroll through than a layer showing none, so at the
+bottom of a file with one long line the numbers and the colours used to sit most
+of a line above their own text. A transform has no scrollable extent to run out
+of.
+
+It is a lexer, not a parser. Comments, strings (including prefixes and triple
+quotes), numbers, keywords, builtins, decorators, and the name after `def` or
+`class` each get a colour; scope does not exist, so a variable named `list` is
+coloured like the builtin. Two cases matter more than the rest, because both
+happen mid-keystroke: an unterminated `'` ends at the newline rather than
+swallowing the file, and a lone `"""` runs to the end and stops. Source past
+`HIGHLIGHT_BYTES_MAX` is escaped without being scanned, since colour is worth
+nothing beside a keystroke that stutters.
+
+The layer is optional at every level. A page that supplies its own editor markup
+without the `<pre>` gets an editor that works in one colour, because
+`wire_editor` takes `highlight` as an optional element and `resolve_editor_elements`
+looks it up rather than requiring it.
 
 ### What an Error Looks Like
 
@@ -255,6 +293,9 @@ a pure function from string to string.
 `test_editor.js` covers the indent arithmetic, which is where a silent wrong
 answer would live: an off-by-one in `indent_selection` moves a student's cursor
 into the middle of their own indentation and they cannot say why.
+`test_highlight.js` covers the tokenizer, and mostly one property of it: the
+tokens must join back into the source unchanged, or the colours drift off the
+text they belong to.
 
 The tests cover the grading engine, which is where a wrong score comes from.
 They do not cover the DOM: a test double for the browser is a second

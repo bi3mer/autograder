@@ -126,3 +126,17 @@ export const RUN_TIMEOUT_MS_MAX = 120_000;
 
 /** Spaces one indent step inserts in the editor. Python's own convention. */
 export const EDITOR_INDENT_SPACES = 4;
+
+/**
+ * Source the editor's highlighter will scan. Past this it paints the buffer
+ * one colour rather than tokenizing it on every keystroke: an assignment is a
+ * page of Python, and a paste large enough to reach this is not one.
+ */
+export const HIGHLIGHT_BYTES_MAX = 128 * 1024;
+
+/**
+ * Tokens from one highlight pass. Every token consumes at least one character,
+ * so `HIGHLIGHT_BYTES_MAX` already bounds this; the assertion is what proves
+ * the scanner never loops without consuming.
+ */
+export const HIGHLIGHT_TOKEN_COUNT_MAX = HIGHLIGHT_BYTES_MAX;

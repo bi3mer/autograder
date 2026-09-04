@@ -23,6 +23,7 @@ export * as constants from "./constants.js";
 export * as editor from "./editor.js";
 export * as grader_app from "./grader.js";
 export * as handout from "./handout.js";
+export * as highlight from "./highlight.js";
 export * as markdown from "./markdown.js";
 export * as page from "./page.js";
 export * as py_runner from "./pyrunner.js";
@@ -32,6 +33,7 @@ export {
   assert, assert_array, assert_range, assert_string, AssertionError, unreachable,
 } from "./assert.js";
 export { escape_html } from "./html.js";
+export { highlight_html } from "./highlight.js";
 export { load_handout } from "./handout.js";
 export { render_markdown } from "./markdown.js";
 

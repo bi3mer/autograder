@@ -15,7 +15,7 @@ import * as autograder from "../src/main.js";
 const EXPECTED_EXPORTS = [
   "AssertionError", "VERSION", "assert", "assert_array", "assert_range", "assert_string",
   "assertions", "checks", "constants", "editor", "escape_html", "grader_app", "handout",
-  "load_handout",
+  "highlight", "highlight_html", "load_handout",
   "markdown", "page", "py_runner", "render_markdown", "rubric", "unreachable",
 ].sort();
 
@@ -32,6 +32,8 @@ test("each namespace export carries the module's entry points", () => {
   assert.equal(typeof autograder.checks.diff_lines, "function");
   assert.equal(typeof autograder.editor.wire_editor, "function");
   assert.equal(typeof autograder.editor.indent_selection, "function");
+  assert.equal(typeof autograder.highlight.highlight_html, "function");
+  assert.equal(typeof autograder.highlight.tokenize_python, "function");
   assert.equal(typeof autograder.page.render_skeleton, "function");
   assert.equal(typeof autograder.markdown.render_markdown, "function");
   assert.equal(typeof autograder.handout.load_handout, "function");
@@ -48,6 +50,7 @@ test("the named re-exports are the same functions as the namespaces'", () => {
   assert.equal(autograder.AssertionError, autograder.assertions.AssertionError);
   assert.equal(autograder.render_markdown, autograder.markdown.render_markdown);
   assert.equal(autograder.load_handout, autograder.handout.load_handout);
+  assert.equal(autograder.highlight_html, autograder.highlight.highlight_html);
 });
 
 test("VERSION is kept in step with package.json", () => {
