@@ -308,6 +308,17 @@ test("earned points are clamped to the criterion's points", async () => {
   assert.equal(under.earned, 0);
 });
 
+test("rounding a value exactly on a half-cent boundary does not trip the drift assertion", async () => {
+  // 13.375 rounds to 13.38, which is not exactly representable in a double —
+  // 1338 / 100 lands a couple of epsilons past 13.375, and a too-strict
+  // tolerance in round_points would flag that representation error as
+  // "rounding moved too far" and throw instead of scoring the row.
+  const item = await grade_one(
+    { id: "half_cent", name: "Half cent", points: 20, type: "custom", check: () => ({ earned: 13.375 }) },
+  );
+  assert.equal(item.earned, 13.38);
+});
+
 test("a non-finite earned stops the run rather than scoring NaN", async () => {
   // Scoring happens outside the per-criterion try/catch: a check that throws
   // costs one row, but a check that returns a number no rubric can add is a

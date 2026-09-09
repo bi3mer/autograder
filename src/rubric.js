@@ -62,8 +62,14 @@ function round_points(points) {
     "round_points: points must be finite",
   );
   const rounded = Math.round(points * 100) / 100;
+  // A point total sitting exactly on a half-cent boundary (e.g. 13.375, from
+  // summing eighths) rounds to a value like 13.38 that is itself not exactly
+  // representable in a double, so the rounded result can land a couple of
+  // epsilons past 0.005 away from the input even though the rounding did
+  // exactly what it should. The tolerance carries a small slack for that
+  // representation error rather than for genuine rounding drift.
   assert(
-    Math.abs(rounded - points) <= 0.005,
+    Math.abs(rounded - points) <= 0.005 + 1e-9,
     "round_points: rounding must move by less than a cent",
   );
   return rounded;
