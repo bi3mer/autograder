@@ -25,9 +25,11 @@ import { HIGHLIGHT_BYTES_MAX, HIGHLIGHT_TOKEN_COUNT_MAX } from "./constants.js";
 import { escape_html } from "./html.js";
 
 /**
- * Reserved words. The soft keywords `match` and `case` are left out on
- * purpose: they are ordinary names outside a match statement, and colouring
- * `case = 3` as a keyword is a worse lie than leaving a match statement plain.
+ * Reserved words. The soft keywords `match` and `case` are not here: they are
+ * ordinary names outside a match statement, and colouring `case = 3` as a
+ * keyword would be a worse lie than leaving a match statement plain. They
+ * live in `PYTHON_SOFT_KEYWORDS` and are coloured only where the statement
+ * form is unmistakable.
  */
 export const PYTHON_KEYWORDS = new Set([
   "False", "None", "True", "and", "as", "assert", "async", "await", "break", "class",
@@ -35,6 +37,12 @@ export const PYTHON_KEYWORDS = new Set([
   "if", "import", "in", "is", "lambda", "nonlocal", "not", "or", "pass", "raise",
   "return", "try", "while", "with", "yield",
 ]);
+
+/**
+ * Words that are keywords only at the head of a statement that opens a block:
+ * `match command:` and `case "quit":`. Anywhere else they are names.
+ */
+export const PYTHON_SOFT_KEYWORDS = new Set(["match", "case"]);
 
 /**
  * The builtins a first-year course actually reaches for, plus the exceptions a
@@ -59,6 +67,47 @@ const OPERATOR = /[+\-*/%=<>!&|^~@]/;
 
 function is_identifier_start(character) {
   return IDENTIFIER_START.test(character);
+}
+
+/** Whether only indentation sits between `index` and the start of its line. */
+function at_line_start(text, index) {
+  let cursor = index;
+  while (cursor > 0 && (text[cursor - 1] === " " || text[cursor - 1] === "\t")) cursor -= 1;
+  return cursor === 0 || text[cursor - 1] === "\n";
+}
+
+/**
+ * Whether the statement whose head ends at `index` has a subject and opens a
+ * block: something follows the word, and the line's last character of code
+ * is a `:`. That is what separates `match command:` from `match = True`, and
+ * `case (x, y):` from `case.close()`. Strings are skipped, since `case ":":`
+ * matches on a colon, and a trailing comment is ignored.
+ *
+ * Mid-keystroke the colon is not there yet, so the word stays plain until it
+ * lands. That is the cheaper mistake: a statement that colours in a moment
+ * late, rather than a variable that is blue until the line is finished.
+ */
+function opens_block(text, index) {
+  let cursor = index;
+  while (cursor < text.length && (text[cursor] === " " || text[cursor] === "\t")) cursor += 1;
+  const first = text[cursor] ?? "\n";
+  if (/[\n:=.,;)\]}#]/.test(first)) return false;
+  let last = "";
+  while (cursor < text.length && text[cursor] !== "\n") {
+    const character = text[cursor];
+    if (character === "#") break;
+    if (character === '"' || character === "'") {
+      const triple = text.startsWith(character.repeat(3), cursor) ? 3 : 1;
+      const end = scan_string(text, cursor, triple);
+      if (text.slice(cursor, end).includes("\n")) return false;
+      cursor = end;
+      last = character;
+      continue;
+    }
+    if (character !== " " && character !== "\t" && character !== "\r") last = character;
+    cursor += 1;
+  }
+  return last === ":";
 }
 
 /**
@@ -160,6 +209,9 @@ export function tokenize_python(source) {
       }
       let kind = "plain";
       if (PYTHON_KEYWORDS.has(word)) kind = "keyword";
+      else if (PYTHON_SOFT_KEYWORDS.has(word) && at_line_start(text, index) && opens_block(text, end)) {
+        kind = "keyword";
+      }
       else if (previous_word === "def" || previous_word === "class") kind = "def";
       else if (PYTHON_BUILTINS.has(word)) kind = "builtin";
       previous_word = word;
@@ -176,7 +228,7 @@ export function tokenize_python(source) {
 
     // A decorator, but only where one can appear: `@` is otherwise matrix
     // multiplication, and `a @ b` is not a decorator on `b`.
-    if (character === "@" && /(^|\n)[ \t]*$/.test(text.slice(0, index))) {
+    if (character === "@" && at_line_start(text, index)) {
       let end = index + 1;
       while (end < text.length && IDENTIFIER_PART.test(text[end])) end += 1;
       if (end > index + 1) {

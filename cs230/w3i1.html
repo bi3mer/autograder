@@ -1,0 +1,204 @@
+<!doctype html>
+<html lang="en">
+    <head>
+        <meta charset="UTF-8" />
+        <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+        <title>Greeter Autograder</title>
+        <link rel="stylesheet" href="../css/a1.css" />
+        <script src="https://cdn.jsdelivr.net/pyodide/v0.26.2/full/pyodide.js"></script>
+    </head>
+    <body>
+        <div class="split">
+            <section class="sheet">
+                <!-- The whole problem statement, fetched from w3i1.md and
+                     rendered by src/markdown.js. The file is the handout,
+                     readable on its own. -->
+                <div class="prose" id="handout"></div>
+            </section>
+
+            <section id="grader"></section>
+        </div>
+        <footer>bi3mer · Runs Python via Pyodide</footer>
+
+        <script type="module">
+            import { grader_app } from "../src/main.js";
+
+            // The one prompt drives both the input() needle the rubric looks
+            // for and the stdin each case feeds, so the wording is written
+            // once here. The handout quotes it again in w3i1.md, which is the
+            // one place the two can drift.
+            const PROMPT = "Employee (E), Member (M), or Other (O)? ";
+
+            // expected_lines carries the echoed prompt lines as well as the
+            // greeting, and the output criterion sets no anchor_prefix. That
+            // is deliberate here: re-asking is the whole exercise, so the
+            // number of prompt lines in the transcript is the thing being
+            // graded. An anchor would skip exactly the evidence that the loop
+            // ran, and a program that asked once would still score full marks
+            // on the cases whose first answer is valid.
+            //
+            // Cases 1-3 are one valid answer each, so every greeting is
+            // reached; a program that hardcodes "Welcome, Member!" fails the
+            // other two. Cases 4-7 each reject something first, and the
+            // comment on each says which mistake it catches. Across the seven,
+            // each of E, M, and O arrives in both cases, so a program that
+            // forgives only the letter it was tested on loses points.
+            const CASES = [
+                {
+                    name: "Example 1 — employee, valid on the first ask",
+                    stdin_lines: ["E"],
+                    expected_lines: [PROMPT + "E", "Welcome, Employee!"],
+                },
+                {
+                    // Lower case counts, so this one ends on the first ask
+                    // rather than re-prompting.
+                    name: "Example 2 — member, typed as lowercase 'm'",
+                    stdin_lines: ["m"],
+                    expected_lines: [PROMPT + "m", "Welcome, Member!"],
+                },
+                {
+                    // "O" greets a Guest, so a program that echoes the letter
+                    // back or prints "Welcome, Other!" misses here only.
+                    name: "Example 3 — other, valid on the first ask",
+                    stdin_lines: ["O"],
+                    expected_lines: [PROMPT + "O", "Welcome, Guest!"],
+                },
+                {
+                    // Catches a loop that tests truthiness rather than
+                    // equality, which accepts an empty line as an answer.
+                    name: "Example 4 — empty line is re-asked",
+                    stdin_lines: ["", "M"],
+                    expected_lines: [
+                        PROMPT + "",
+                        PROMPT + "M",
+                        "Welcome, Member!",
+                    ],
+                },
+                {
+                    // Catches `status in "EMO"`, which is True for "EM" and
+                    // for the empty string above.
+                    name: "Example 5 — 'EM' is re-asked, then lowercase 'o'",
+                    stdin_lines: ["EM", "o"],
+                    expected_lines: [
+                        PROMPT + "EM",
+                        PROMPT + "o",
+                        "Welcome, Guest!",
+                    ],
+                },
+                {
+                    // Catches an if instead of a while: one rejection can be
+                    // survived by asking twice, three cannot.
+                    name: "Example 6 — three bad answers, then 'O'",
+                    stdin_lines: ["x", "Employee", "1", "O"],
+                    expected_lines: [
+                        PROMPT + "x",
+                        PROMPT + "Employee",
+                        PROMPT + "1",
+                        PROMPT + "O",
+                        "Welcome, Guest!",
+                    ],
+                },
+                {
+                    // Catches .strip() on the answer: the case of the letter
+                    // is forgiven, the space around it is not. Note the
+                    // trailing space in both the stdin line and the echo.
+                    name: "Example 7 — 'E ' is re-asked, then lowercase 'e'",
+                    stdin_lines: ["E ", "e"],
+                    expected_lines: [
+                        PROMPT + "E ",
+                        PROMPT + "e",
+                        "Welcome, Employee!",
+                    ],
+                },
+            ];
+
+            // Both quote styles, and with or without the trailing space, so a
+            // student is graded on the prompt's wording rather than on which
+            // quote character they reached for.
+            function prompt_needles(prompt) {
+                const trimmed = prompt.trimEnd();
+                return [
+                    `input("${prompt}")`,
+                    `input('${prompt}')`,
+                    `input("${trimmed}")`,
+                    `input('${trimmed}')`,
+                ];
+            }
+
+            function build_criteria(results) {
+                return [
+                    {
+                        id: "input",
+                        name: "Input handling",
+                        points: 5,
+                        description:
+                            "Source calls input() with the exact prompt text from the handout.",
+                        type: "code",
+                        needles: [prompt_needles(PROMPT)],
+                        mode: "all",
+                    },
+                    {
+                        id: "output",
+                        name: "Correct output",
+                        points: 15,
+                        description:
+                            "15 points split evenly across all examples, prorated by the % of lines that match exactly.",
+                        type: "output-diff",
+                        cases: CASES,
+                    },
+                    {
+                        // The examples already fail a program that asks a
+                        // fixed number of times, so this row is about writing
+                        // the loop the activity is for. `while` has to open a
+                        // line, which keeps the word inside a comment or a
+                        // string from earning the points.
+                        id: "loop",
+                        name: "Use of a while loop",
+                        points: 5,
+                        description:
+                            "Re-asking is done with a while loop rather than repeated ifs.",
+                        type: "code-regex",
+                        regex: /^[ \t]*while\b/m,
+                    },
+                    {
+                        // The greeting has to be a match statement, so the
+                        // regex wants `match` opening a line and a colon
+                        // after it. The flag variable is named match_found,
+                        // and \b does not fire between "match" and "_", so
+                        // the assignment that names it cannot earn this row.
+                        id: "match",
+                        name: "Use of match",
+                        points: 5,
+                        description:
+                            "The greeting is chosen with a match statement rather than an if.",
+                        type: "code-regex",
+                        regex: /^[ \t]*match\b[^\n]*:/m,
+                    },
+                    {
+                        id: "flake8",
+                        name: "flake8",
+                        points: 10,
+                        description:
+                            "−1 point per flake8 finding, down to a floor of 0.",
+                        type: "flake8",
+                        partial: true,
+                    },
+                ];
+            }
+
+            // The right column only: w3i1.md fills the left, and the page
+            // carries its own footer below both.
+            grader_app.init({
+                filename: "w3-i1.py",
+                editor: true,
+                title: "Submission",
+                subtitle: "Graded in this tab · nothing leaves your browser",
+                cases: CASES,
+                build_criteria,
+                max_auto_points: 40,
+                mount: "#grader",
+                handout: "w3i1.md",
+            });
+        </script>
+    </body>
+</html>

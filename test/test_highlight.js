@@ -56,6 +56,34 @@ test("keywords, builtins, and the name after def are told apart", () => {
   assert.deepEqual(kinds("printer = 2"), ["op:=", "number:2"]);
 });
 
+test("match and case are keywords only at the head of a statement that opens a block", () => {
+  assert.deepEqual(
+    kinds("match command:\n    case \"quit\":\n        break\n    case _:\n        pass\n"),
+    ["keyword:match", "keyword:case", 'string:"quit"', "keyword:break", "keyword:case", "keyword:pass"],
+  );
+  // A subject in brackets, a pattern with a guard, and a trailing comment.
+  assert.deepEqual(kinds("match (x, y):"), ["keyword:match"]);
+  assert.deepEqual(kinds("    case [a, b] if a > b:  # note"), ["keyword:case", "keyword:if", "op:>", "comment:# note"]);
+  // The colon inside the string is the pattern; the one after it opens the block.
+  assert.deepEqual(kinds("    case ':':"), ["keyword:case", "string:':'"]);
+  assert.deepEqual(kinds("    case {'a': 1}:"), ["keyword:case", "string:'a'", "number:1"]);
+  // As a name, in every position a first-year program puts one.
+  assert.deepEqual(kinds("match = True"), ["op:=", "keyword:True"]);
+  assert.deepEqual(kinds("case = 3"), ["op:=", "number:3"]);
+  assert.deepEqual(kinds("match.group(1)"), ["number:1"]);
+  assert.deepEqual(kinds("match(pattern, s)"), []);
+  assert.deepEqual(kinds("if match:"), ["keyword:if"]);
+  assert.deepEqual(kinds("x = 1; match y:"), ["op:=", "number:1"]);
+  assert.deepEqual(kinds("def match(a):"), ["keyword:def", "def:match"]);
+  // A dict key, and an annotation, both end their line with something else.
+  assert.deepEqual(kinds("    match: 1,"), ["number:1"]);
+  assert.deepEqual(kinds("match: int = 0"), ["builtin:int", "op:=", "number:0"]);
+  // No subject is no statement, and neither is a colon on the next line.
+  assert.deepEqual(kinds("match:"), []);
+  assert.deepEqual(kinds("case  # todo\n:"), ["comment:# todo"]);
+  assert.deepEqual(kinds("match \"\"\"a\nb\"\"\":"), ['string:"""a\nb"""']);
+});
+
 test("a comment runs to the end of its line and no further", () => {
   assert.deepEqual(
     kinds("x = 1  # set x\ny = 2"),
