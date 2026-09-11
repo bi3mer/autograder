@@ -1,0 +1,157 @@
+<!doctype html>
+<html lang="en">
+    <head>
+        <meta charset="UTF-8" />
+        <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+        <title>FizzBuzz Autograder</title>
+        <link rel="stylesheet" href="../css/a1.css" />
+        <script src="https://cdn.jsdelivr.net/pyodide/v0.26.2/full/pyodide.js"></script>
+    </head>
+    <body>
+        <div class="split">
+            <section class="sheet">
+                <!-- The whole problem statement, fetched from w3i2.md and
+                     rendered by src/markdown.js. The file is the handout,
+                     readable on its own. -->
+                <div class="prose" id="handout"></div>
+            </section>
+
+            <section id="grader"></section>
+        </div>
+        <footer>bi3mer · Runs Python via Pyodide</footer>
+
+        <script type="module">
+            import { grader_app } from "../src/main.js";
+
+            // The one prompt drives both the input() needle the rubric looks
+            // for and the stdin each case feeds, so the wording is written
+            // once here. The handout quotes it again in w3i2.md, which is the
+            // one place the two can drift.
+            const PROMPT = "Enter a positive whole number: ";
+
+            // The expected transcript is generated rather than typed out, so
+            // a case is just the list of answers the user types. Every answer
+            // is echoed after the prompt, and the last one is the number to
+            // count to. The output criterion sets no anchor_prefix on
+            // purpose: the number of prompt lines is the evidence that the
+            // validation loop ran, so the echoes have to be graded too.
+            function fizzbuzz_case(name, answers) {
+                const n = Number(answers[answers.length - 1]);
+                const lines = answers.map((a) => PROMPT + a);
+                for (let i = 1; i <= n; i++) {
+                    if (i % 15 === 0) lines.push("FizzBuzz");
+                    else if (i % 3 === 0) lines.push("Fizz");
+                    else if (i % 5 === 0) lines.push("Buzz");
+                    else lines.push(String(i));
+                }
+                return { name, stdin_lines: answers, expected_lines: lines };
+            }
+
+            // Cases 1-3 are valid on the first ask. Case 1 has no multiple
+            // of 15, so it passes even when the branches are in the wrong
+            // order; case 2 ends on 15 and catches that. Case 3 catches
+            // range(n) instead of range(1, n + 1), which would print
+            // nothing. Cases 4 and 5 reject something first: case 4 catches
+            // `while n < 0`, which lets 0 through, and case 5 catches an if
+            // instead of a while, which survives one rejection but not two.
+            // Only whole numbers are fed, so int() never has to fail.
+            const CASES = [
+                fizzbuzz_case("Example 1 — count to 5", ["5"]),
+                fizzbuzz_case("Example 2 — count to 15", ["15"]),
+                fizzbuzz_case("Example 3 — count to 1", ["1"]),
+                fizzbuzz_case("Example 4 — 0 is re-asked, then 3", ["0", "3"]),
+                fizzbuzz_case("Example 5 — two negatives, then 10", [
+                    "-7",
+                    "-1",
+                    "10",
+                ]),
+            ];
+
+            // Both quote styles, and with or without the trailing space, so a
+            // student is graded on the prompt's wording rather than on which
+            // quote character they reached for.
+            function prompt_needles(prompt) {
+                const trimmed = prompt.trimEnd();
+                return [
+                    `input("${prompt}")`,
+                    `input('${prompt}')`,
+                    `input("${trimmed}")`,
+                    `input('${trimmed}')`,
+                ];
+            }
+
+            function build_criteria(results) {
+                return [
+                    {
+                        id: "input",
+                        name: "Input handling",
+                        points: 5,
+                        description:
+                            "Source calls input() with the exact prompt text from the handout.",
+                        type: "code",
+                        needles: [prompt_needles(PROMPT)],
+                        mode: "all",
+                    },
+                    {
+                        id: "output",
+                        name: "Correct output",
+                        points: 15,
+                        description:
+                            "15 points split evenly across all examples, prorated by the % of lines that match exactly.",
+                        type: "output-diff",
+                        cases: CASES,
+                    },
+                    {
+                        // The examples already fail a program that asks a
+                        // fixed number of times, so this row is about writing
+                        // the validation loop. `while` has to open a line,
+                        // which keeps the word inside a comment or a string
+                        // from earning the points.
+                        id: "while",
+                        name: "Use of a while loop",
+                        points: 5,
+                        description:
+                            "Re-asking is done with a while loop rather than an if.",
+                        type: "code-regex",
+                        regex: /^[ \t]*while\b/m,
+                    },
+                    {
+                        // Counting up is the other half of the activity, so
+                        // this row wants a for loop, opening a line for the
+                        // same reason.
+                        id: "for",
+                        name: "Use of a for loop",
+                        points: 5,
+                        description:
+                            "Counting is done with a for loop over range() rather than a while loop.",
+                        type: "code-regex",
+                        regex: /^[ \t]*for\b/m,
+                    },
+                    {
+                        id: "flake8",
+                        name: "flake8",
+                        points: 10,
+                        description:
+                            "−1 point per flake8 finding, down to a floor of 0.",
+                        type: "flake8",
+                        partial: true,
+                    },
+                ];
+            }
+
+            // The right column only: w3i2.md fills the left, and the page
+            // carries its own footer below both.
+            grader_app.init({
+                filename: "w3-i2.py",
+                editor: true,
+                title: "Submission",
+                subtitle: "Graded in this tab · nothing leaves your browser",
+                cases: CASES,
+                build_criteria,
+                max_auto_points: 40,
+                mount: "#grader",
+                handout: "w3i2.md",
+            });
+        </script>
+    </body>
+</html>
