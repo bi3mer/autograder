@@ -1,0 +1,357 @@
+<!doctype html>
+<html lang="en">
+    <head>
+        <meta charset="UTF-8" />
+        <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+        <title>Find It Autograder</title>
+        <link rel="stylesheet" href="../css/a1.css" />
+        <script src="https://cdn.jsdelivr.net/pyodide/v0.26.2/full/pyodide.js"></script>
+    </head>
+    <body>
+        <div class="split">
+            <section class="sheet">
+                <!-- The whole problem statement, fetched from w4i2.md and
+                     rendered by src/markdown.js. The file is the handout,
+                     readable on its own. -->
+                <div class="prose" id="handout"></div>
+            </section>
+
+            <section id="grader"></section>
+        </div>
+        <footer>bi3mer · Runs Python via Pyodide</footer>
+
+        <script type="module">
+            import { grader_app } from "../src/main.js";
+            import { assert } from "../src/assert.js";
+
+            // The prompts drive both the input() needles the rubric looks for
+            // and the transcript each case expects, so the wording is written
+            // once here. The handout's starter code quotes them again in
+            // w4i2.md, which is the one place the two can drift.
+            const PROMPT_WORD = "Enter a word: ";
+            const PROMPT_SUBSTRING = "Enter a substring: ";
+
+            // The handout's validation rules, written once so the cases
+            // below can be checked against them at startup.
+            function valid_word(word) {
+                return word.length > 0;
+            }
+            function valid_substring(substring, word) {
+                return substring.length > 0 && substring.length <= word.length;
+            }
+
+            // A case is the answers typed at each prompt and the position the
+            // program should print. Every answer is echoed after its prompt;
+            // the last word and the last substring are the valid ones, and the
+            // ones before are rejected, so the transcript is generated from
+            // the answers. The position is spelled out so a reader can check
+            // the case against the handout, and each part is asserted so a
+            // miscounted position or an answer the rules would not reject
+            // fails at startup rather than grading every correct submission
+            // down. The output criterion sets no anchor_prefix on purpose:
+            // the number of prompt lines is the evidence that the validation
+            // loops ran, so the echoes have to be graded too.
+            function find_case(name, words, substrings, position) {
+                const word = words[words.length - 1];
+                const substring = substrings[substrings.length - 1];
+                assert(valid_word(word), `find_case "${name}": last word must be valid`);
+                assert(valid_substring(substring, word), `find_case "${name}": last substring must be valid`);
+                for (const rejected of words.slice(0, -1)) {
+                    assert(!valid_word(rejected), `find_case "${name}": "${rejected}" is a valid word`);
+                }
+                for (const rejected of substrings.slice(0, -1)) {
+                    assert(
+                        !valid_substring(rejected, word),
+                        `find_case "${name}": "${rejected}" is a valid substring`,
+                    );
+                }
+                assert(
+                    position === word.indexOf(substring),
+                    `find_case "${name}": expected position ${word.indexOf(substring)}`,
+                );
+                return {
+                    name,
+                    stdin_lines: [...words, ...substrings],
+                    expected_lines: [
+                        ...words.map((answer) => PROMPT_WORD + answer),
+                        ...substrings.map((answer) => PROMPT_SUBSTRING + answer),
+                        String(position),
+                    ],
+                };
+            }
+
+            // Cases 1-4 are the handout's examples. Case 3 catches a dropped
+            // break, which reports the last "a" rather than the first, and
+            // runs the inner loop exactly once. Case 4 rejects one answer at
+            // each prompt and then answers 0, which a program that treats 0
+            // as "not found" gets wrong. Case 5 puts the substring at the
+            // very end, where a range bound without the starter's "+ 1"
+            // never looks. Case 6 rejects the word twice, which catches an if
+            // instead of a while: that survives one empty answer but not
+            // two. Case 7 rejects the substring twice, once for each rule, so
+            // a program that checks only one of them fails it. Case 8 is a
+            // substring the same length as the word, which is the boundary
+            // the handout states and the one a "<" instead of "<=" rejects.
+            // Case 9 is a one-character word, which a length test written as
+            // "<= 1" rather than "== 0" wrongly re-asks.
+            const CASES = [
+                find_case("Example 1 — banana / nan", ["banana"], ["nan"], 2),
+                find_case("Example 2 — banana / xyz", ["banana"], ["xyz"], -1),
+                find_case("Example 3 — banana / a", ["banana"], ["a"], 1),
+                find_case(
+                    "Example 4 — empty is re-asked, banana / bananas is re-asked, ban",
+                    ["", "banana"], ["bananas", "ban"], 0,
+                ),
+                find_case("Example 5 — hello / lo", ["hello"], ["lo"], 3),
+                find_case(
+                    "Example 6 — two empties, then programming / ram",
+                    ["", "", "programming"], ["ram"], 4,
+                ),
+                find_case(
+                    "Example 7 — cat / empty and cats are re-asked, then at",
+                    ["cat"], ["", "cats", "at"], 1,
+                ),
+                find_case("Example 8 — cat / cat", ["cat"], ["cat"], 0),
+                find_case("Example 9 — a / a", ["a"], ["a"], 0),
+            ];
+
+            // Both quote styles, and with or without the trailing space, so a
+            // student is graded on the prompt's wording rather than on which
+            // quote character they reached for.
+            function prompt_needles(prompt) {
+                const trimmed = prompt.trimEnd();
+                return [
+                    `input("${prompt}")`,
+                    `input('${prompt}')`,
+                    `input("${trimmed}")`,
+                    `input('${trimmed}')`,
+                ];
+            }
+
+            // Every `for` statement, anchored to the start of a line like the
+            // while and for regexes in w3i2, so the word inside a comment
+            // cannot count. Group 1 is the loop target and group 2 the
+            // iterable up to the colon: `for j in range(len(substring)):` yields
+            // "j" and "range(len(substring))", and `for c in word:` yields "c"
+            // and "word".
+            const FOR_STATEMENT = /^[ \t]*for\s+(.+?)\s+in\s+(.+?)\s*:/gm;
+            const RANGE_CALL = /^range\s*\(/;
+
+            // Strings and comments are blanked before scanning. The summary
+            // students paste in as a docstring is prose, and a sentence like
+            // "for each letter in the word:" at the start of a line would
+            // otherwise read as a forbidden loop; a comment like "# is the
+            // substring in the word?" or a print("not in word") would read as
+            // the `in` operator. Docstrings and comments keep only their
+            // newlines, so the line numbers in the detail still match the
+            // editor; a one-line string keeps its quotes, so a loop over a
+            // literal still parses as a loop.
+            const TRIPLE_QUOTED = /"""[\s\S]*?"""|'''[\s\S]*?'''/g;
+            const SINGLE_QUOTED = /"(?:[^"\\\n]|\\.)*"|'(?:[^'\\\n]|\\.)*'/g;
+            const COMMENT = /#[^\n]*/g;
+            function code_only(source) {
+                return source
+                    .replace(TRIPLE_QUOTED, (text) => text.replace(/[^\n]/g, ""))
+                    .replace(SINGLE_QUOTED, '""')
+                    .replace(COMMENT, "");
+            }
+
+            // Indexing by position is the point of the activity, so a for
+            // loop over anything other than range() (the string itself,
+            // enumerate(word), reversed(word)) scores zero even when a
+            // range() loop is also present. The detail names the line, since
+            // the student needs to know which loop cost them, not only that
+            // one did.
+            function range_loop_check(context) {
+                const source = code_only(context.source);
+                let range_loop = null;
+                for (const match of source.matchAll(FOR_STATEMENT)) {
+                    const line_number = source.slice(0, match.index).split("\n").length;
+                    const statement = match[0].trim();
+                    const iterable = match[2];
+                    if (!RANGE_CALL.test(iterable)) {
+                        return {
+                            pass: false,
+                            detail:
+                                `Line ${line_number} loops directly over "${iterable}" ` +
+                                `("${statement}"), which has not been covered. ` +
+                                "Loop over range(len(...)) and read each character " +
+                                "by index instead.",
+                        };
+                    }
+                    range_loop ??= { line_number, statement };
+                }
+                if (range_loop === null) {
+                    return { pass: false, detail: 'No "for ... in range(...)" loop found.' };
+                }
+                return {
+                    pass: true,
+                    detail: `Line ${range_loop.line_number}: "${range_loop.statement}".`,
+                };
+            }
+
+            // Writing find() is the activity, so calling it is not a lost
+            // row but a zero for the whole submission, the same as a syntax
+            // error. The gate below scans the same blanked source as the
+            // checks, so the handout's mention of find() pasted into a
+            // docstring, or a comment saying "my own .find()", cannot trip
+            // it. Only the exact method: .rfind() and .index() stay with the
+            // indexing row below.
+            const FIND_CALL = /\.find\s*\(/;
+            function no_find_check(source) {
+                const lines = code_only(source).split("\n");
+                for (let index = 0; index < lines.length; index++) {
+                    if (!FIND_CALL.test(lines[index])) continue;
+                    return {
+                        pass: false,
+                        detail:
+                            `Line ${index + 1} calls .find() ("${lines[index].trim()}"). ` +
+                            "Writing find() yourself is the activity, so calling " +
+                            "it scores zero.",
+                    };
+                }
+                return { pass: true, detail: "" };
+            }
+
+            // Reading the characters by index is the assignment, so anything
+            // that does it for the student scores zero even when a real
+            // index expression is also present: a string method that
+            // searches, a slice that does the inner loop's copying in one
+            // step, or the `in` operator. `in` is only a shortcut outside a
+            // for statement, where it is the loop's own syntax. find() is
+            // absent here because the gate above already zeroes it.
+            const SEARCH_METHOD = /\.(rfind|index|rindex|startswith|endswith)\s*\(/;
+            const SLICE = /\[[^\]\n]*:[^\]\n]*\]/;
+            const IN_OPERATOR = /\bin\b/;
+            const FOR_LINE = /^[ \t]*for\b/;
+            function shortcut_on(line) {
+                const method = line.match(SEARCH_METHOD);
+                if (method !== null) return `calls .${method[1]}()`;
+                if (SLICE.test(line)) return "takes a slice";
+                if (!FOR_LINE.test(line) && IN_OPERATOR.test(line)) return 'uses "in"';
+                return null;
+            }
+
+            // A word character has to sit before the `[`, which is what tells
+            // `word[i + j]` from a list literal like `= [1, 2]`. Spaces
+            // between are allowed because flake8 already charges for
+            // `word [i]` (E211).
+            const INDEX_EXPRESSION = /\w[ \t]*\[[^\]\n]+\]/;
+
+            function indexing_check(context) {
+                const source = code_only(context.source);
+                const lines = source.split("\n");
+                for (let index = 0; index < lines.length; index++) {
+                    const shortcut = shortcut_on(lines[index]);
+                    if (shortcut === null) continue;
+                    return {
+                        pass: false,
+                        detail:
+                            `Line ${index + 1} ${shortcut} ("${lines[index].trim()}"), ` +
+                            "which skips the indexing. Read the characters one at " +
+                            "a time with the loops instead.",
+                    };
+                }
+                const match = source.match(INDEX_EXPRESSION);
+                if (match === null) {
+                    return { pass: false, detail: "No index expression like word[i + j] found." };
+                }
+                const line_number = source.slice(0, match.index).split("\n").length;
+                return {
+                    pass: true,
+                    detail: `Line ${line_number}: "${lines[line_number - 1].trim()}".`,
+                };
+            }
+
+            function build_criteria(results) {
+                return [
+                    {
+                        id: "input",
+                        name: "Input handling",
+                        points: 5,
+                        description:
+                            "Source calls input() with both prompts from the starter code.",
+                        type: "code",
+                        needles: [prompt_needles(PROMPT_WORD), prompt_needles(PROMPT_SUBSTRING)],
+                        mode: "all",
+                    },
+                    {
+                        id: "output",
+                        name: "Correct output",
+                        points: 15,
+                        description:
+                            "15 points split evenly across all examples, prorated by the % of lines that match exactly.",
+                        type: "output-diff",
+                        cases: CASES,
+                    },
+                    {
+                        // The examples already fail a program that asks a
+                        // fixed number of times, so this row is about writing
+                        // the validation loop. `while` has to open a line,
+                        // which keeps the word inside a comment or a string
+                        // from earning the points. This regex scans the raw
+                        // source, and every row's name is pasted back into it
+                        // as a docstring line, so no name may open with
+                        // `while`.
+                        id: "while",
+                        name: "Use of a while loop",
+                        points: 5,
+                        description:
+                            "Re-asking for an invalid word or substring is done with a while loop rather than an if.",
+                        type: "code-regex",
+                        regex: /^[ \t]*while\b/m,
+                    },
+                    {
+                        id: "range-loop",
+                        name: "Use of a for loop over range()",
+                        points: 5,
+                        description:
+                            "Every for loop counts over range(...).",
+                        type: "custom",
+                        check: range_loop_check,
+                    },
+                    {
+                        id: "indexing",
+                        name: "Indexing into the string",
+                        points: 5,
+                        description:
+                            "Each character is read by indexing the string (word[i + j]), one at a time.",
+                        type: "custom",
+                        check: indexing_check,
+                    },
+                    {
+                        id: "flake8",
+                        name: "flake8",
+                        points: 5,
+                        description:
+                            "−1 point per flake8 finding, down to a floor of 0.",
+                        type: "flake8",
+                        partial: true,
+                    },
+                ];
+            }
+
+            // The right column only: w4i2.md fills the left, and the page
+            // carries its own footer below both.
+            grader_app.init({
+                filename: "w4-i2.py",
+                editor: true,
+                title: "Submission",
+                subtitle: "Graded in this tab · nothing leaves your browser",
+                cases: CASES,
+                build_criteria,
+                gates: [
+                    {
+                        name: "Does not call find()",
+                        description:
+                            "Gate: calling .find() forces a total score of zero, the same as a syntax error.",
+                        check: no_find_check,
+                    },
+                ],
+                max_auto_points: 40,
+                mount: "#grader",
+                handout: "w4i2.md",
+            });
+        </script>
+    </body>
+</html>

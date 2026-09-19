@@ -39,6 +39,9 @@ export const CRITERION_COUNT_MAX = 128;
 /** Manual (instructor-graded) rubric rows. */
 export const MANUAL_ROW_COUNT_MAX = 64;
 
+/** Gates a page adds beside the syntax probe. */
+export const GATE_COUNT_MAX = 16;
+
 /** Lint findings retained from one lint pass. */
 export const LINT_FINDING_COUNT_MAX = 10_000;
 

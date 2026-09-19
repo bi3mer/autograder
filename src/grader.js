@@ -27,6 +27,7 @@ import {
   CRITERION_COUNT_MAX,
   EDITOR_LINE_COUNT_MAX,
   FILENAME_CHARS_MAX,
+  GATE_COUNT_MAX,
   HANDOUT_HREF_CHARS_MAX,
   MANUAL_ROW_COUNT_MAX,
   NEEDLE_CHARS_MAX,
@@ -52,6 +53,11 @@ import {
  * - `manual_rows`: instructor-graded rows, not totalled, each
  *   `{ name, description, score, detail }` where `score` is text like
  *   `"manual / 5"`.
+ * - `gates`: `{ name, description, check }` each, where `check(source)`
+ *   returns `{ pass, detail }`. A failing gate zeroes the submission the way
+ *   a syntax error does: its row reads ZERO, the banner names it, and the
+ *   cases never run. For a construct an assignment forbids outright, where a
+ *   rubric row's zero would leave the rest of the score standing.
  * - `title`, `subtitle`, `headline_label`, `drop_prompt`, `drop_hint`,
  *   `accept`, `footer`: page text, each with a default (the title falls back
  *   to `document.title`, the caption to `"/ <max_auto_points> auto"`, and the
@@ -286,6 +292,16 @@ function check_config(config) {
     "config.manual_rows",
     MANUAL_ROW_COUNT_MAX,
   );
+  const gates = assert_array(config.gates ?? [], "config.gates", GATE_COUNT_MAX);
+  for (let index = 0; index < gates.length; index++) {
+    assert_string(gates[index].name, `config.gates[${index}].name`, NEEDLE_CHARS_MAX);
+    assert(gates[index].name.length > 0, `config.gates[${index}].name must not be empty`);
+    assert_string(gates[index].description ?? "", `config.gates[${index}].description`, NEEDLE_CHARS_MAX);
+    assert(
+      typeof gates[index].check === "function",
+      `config.gates[${index}].check must be a function`,
+    );
+  }
 }
 
 function row_html(row) {
@@ -342,16 +358,43 @@ function row_for_syntax(probe) {
 }
 
 /**
+ * A page's own gate, shaped like the syntax row so the two read as one
+ * policy. A check that throws fails the gate and reports the error in the
+ * row, the way a criterion does, rather than taking the grading run down.
+ */
+function row_for_gate(gate, source) {
+  assert(gate != null, "row_for_gate: gate must not be null");
+  assert(typeof source === "string", "row_for_gate: source must be a string");
+  let result;
+  try {
+    result = gate.check(source) ?? {};
+    assert(typeof result.pass === "boolean", `gate "${gate.name}": check must return pass`);
+  } catch (error) {
+    result = { pass: false, detail: `Check failed: ${reason_for(error)}` };
+  }
+  const detail = escape_html(result.detail ?? "");
+  return {
+    mark: result.pass ? "✓" : "✗",
+    state: result.pass ? "pass" : "fail",
+    name: gate.name,
+    description: gate.description ?? "",
+    score: result.pass ? "OK" : "ZERO",
+    detail: result.pass ? detail : `<span class="bad">${detail}</span>`,
+  };
+}
+
+/**
  * The plain-text summary a student pastes into their submission. `args` is
- * `{ filename, total_points, max_auto_points, has_syntax_error }`.
+ * `{ filename, total_points, max_auto_points, zero_reason }`, where
+ * `zero_reason` is the phrase that explains a forced zero, or null.
  */
 function summary_text(args, rows) {
   assert(args != null, "summary_text: args must not be null");
   assert(Array.isArray(rows), "summary_text: rows must be an array");
   const lines = [`${args.filename} — Autograder Summary`];
   lines.push(
-    args.has_syntax_error
-      ? "Score: 0 (syntax error — see below)"
+    args.zero_reason != null
+      ? `Score: 0 (${args.zero_reason} — see below)`
       : `Score: ${args.total_points} / ${args.max_auto_points}`,
   );
   lines.push("");
@@ -715,7 +758,10 @@ async function score_submission(session) {
 /**
  * A submission that does not compile scores zero by assignment policy, so the
  * syntax probe gates everything: there is no point diffing the output of a
- * program that never ran.
+ * program that never ran. A page's own gates sit beside it and zero the same
+ * way. Every gate row is shown even when an earlier one failed, so a student
+ * sees everything that has to change, but the banner and the summary name
+ * only the first reason.
  */
 async function grade_submission(session) {
   assert(session.source != null, "grade_submission: no submission loaded");
@@ -730,13 +776,20 @@ async function grade_submission(session) {
       filename: config.filename,
     },
   );
-  const has_syntax_error = probe.err.startsWith(SYNTAX_PREFIX);
   const rows = [row_for_syntax(probe)];
+  let zero_reason = probe.err.startsWith(SYNTAX_PREFIX) ? "syntax error" : null;
+  for (let index = 0; index < session.gates.length; index++) {
+    const row = row_for_gate(session.gates[index], session.source);
+    rows.push(row);
+    if (row.state === "fail") zero_reason ??= `failed "${row.name}"`;
+  }
 
   let total_points = 0;
-  if (has_syntax_error) {
+  if (zero_reason !== null) {
     elements.zero.style.display = "block";
-    elements.zero.textContent = SYNTAX_ZERO_MESSAGE;
+    elements.zero.textContent = zero_reason === "syntax error"
+      ? SYNTAX_ZERO_MESSAGE
+      : `${zero_reason[0].toUpperCase()}${zero_reason.slice(1)} — score is zero per assignment policy.`;
   } else {
     const report = await score_submission(session);
     total_points = report.total;
@@ -755,7 +808,7 @@ async function grade_submission(session) {
       filename: config.filename,
       total_points,
       max_auto_points: config.max_auto_points,
-      has_syntax_error,
+      zero_reason,
     },
     rows,
   );
@@ -914,6 +967,7 @@ export function init(config) {
     config,
     elements: resolve_elements(ids),
     manual_rows: config.manual_rows ?? [],
+    gates: config.gates ?? [],
     source: null,
     grading: false,
     // Everything below belongs to the editor, and stays null without one.

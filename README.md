@@ -264,6 +264,14 @@ many needles were found. An `output-diff` case awards points in proportion to
 how many lines match. A `flake8` criterion with `partial: true` deducts one
 point per finding, with a floor of zero.
 
+A construct an assignment forbids outright goes in `gates` rather than in a
+criterion, because a criterion's zero leaves the rest of the score standing.
+Each gate is `{ name, description, check }`, and `check(source)` returns
+`{ pass, detail }`. A failing gate zeroes the submission the way the syntax
+probe does: its row reads ZERO, the banner names it, the summary says
+`Score: 0 (failed "<name>" — see below)`, and the cases never run.
+`cs230/w4i2.html` gates on `.find()`, since writing `find()` is that activity.
+
 ## Development
 
 ```
