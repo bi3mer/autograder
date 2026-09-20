@@ -1,0 +1,426 @@
+<!doctype html>
+<html lang="en">
+    <head>
+        <meta charset="UTF-8" />
+        <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+        <title>Date Validation Autograder</title>
+        <link rel="stylesheet" href="../css/a1.css" />
+        <script src="https://cdn.jsdelivr.net/pyodide/v0.26.2/full/pyodide.js"></script>
+    </head>
+    <body>
+        <div class="split">
+            <section class="sheet">
+                <!-- The whole problem statement, fetched from w4p1.md and
+                     rendered by src/markdown.js. The file is the handout,
+                     readable on its own. -->
+                <div class="prose" id="handout"></div>
+            </section>
+
+            <section id="grader"></section>
+        </div>
+        <footer>bi3mer · Runs Python via Pyodide</footer>
+
+        <script type="module">
+            import { grader_app } from "../src/main.js";
+            import { assert } from "../src/assert.js";
+
+            // The prompt drives both the input() needle the rubric looks for
+            // and the transcript each case expects, so the wording is written
+            // once here. The handout quotes it again in w4p1.md, which is the
+            // one place the two can drift.
+            const PROMPT = "Enter a date (YYYY/MM/DD): ";
+            const OUTPUT_LABEL = "Date: ";
+
+            // The handout's rules, written once so the cases below can be
+            // checked against them at startup. `all_digits` is Python's
+            // str.isdigit() for the ASCII the cases use: it rejects the
+            // empty string, a sign, and a space, which is what makes " 7"
+            // and "+7" invalid even though int() would accept them.
+            function all_digits(text) {
+                return /^[0-9]+$/.test(text);
+            }
+            function valid_part(text, width) {
+                return all_digits(text) && text.length === width;
+            }
+            function valid_date(answer) {
+                const parts = answer.split("/");
+                if (parts.length !== 3) return false;
+                const [year, month, day] = parts;
+                if (!valid_part(year, 4) || !valid_part(month, 2) || !valid_part(day, 2)) {
+                    return false;
+                }
+                return Number(month) >= 1 && Number(month) <= 12 &&
+                    Number(day) >= 1 && Number(day) <= 28;
+            }
+
+            // A case is the answers typed at the prompt, in order. Every
+            // answer is echoed after the prompt; the last one is the valid
+            // date, and the ones before are rejected, so the transcript is
+            // generated from the answers. Each answer is asserted against
+            // the rules so a case that the handout would not reject fails at
+            // startup rather than grading every correct submission down. The
+            // output criterion sets no anchor_prefix on purpose: the number
+            // of prompt lines is the evidence that the validation loop ran,
+            // so the echoes have to be graded too.
+            function date_case(name, answers) {
+                const date = answers[answers.length - 1];
+                assert(valid_date(date), `date_case "${name}": last answer must be valid`);
+                for (const rejected of answers.slice(0, -1)) {
+                    assert(!valid_date(rejected), `date_case "${name}": "${rejected}" is a valid date`);
+                }
+                return {
+                    name,
+                    stdin_lines: answers,
+                    expected_lines: [
+                        ...answers.map((answer) => PROMPT + answer),
+                        OUTPUT_LABEL + date.split("/").join("-"),
+                    ],
+                };
+            }
+
+            // One rejected answer per way of being wrong, in an order that
+            // mixes them, for the last case below.
+            const REJECTED_MIX = [
+                "", "hello", "2026", "2026/12", "2026-12-07", "2026//12/07",
+                "2026/12/07/", "/2026/12/07", "2026/12/07/07", "//", "202a/12/07",
+                "999/12/07", "12026/12/07", "2026/1/7", "2026/00/07", "2026/13/07",
+                "2026/12/00", "2026/12/29", "2026/12/ 7", "2026/12/+7",
+            ];
+
+            // Cases 1-4 are the handout's examples. Case 5 has four parts of
+            // which the first three are a valid date, so a program that
+            // never counts the parts accepts it and prints either the date
+            // or "2026-12-07-07". Case 6 has two parts, where the same
+            // program crashes reading parts[2]. Case 7 is three empty parts,
+            // which passes the count and crashes a program that calls int()
+            // before isdigit(). Case 8 has a space in the day: " 7" is two
+            // characters and int(" 7") is 7, so only isdigit() rejects it.
+            // Cases 9 and 10 sit on both ends of the day and month ranges,
+            // so ">= 0", "< 12", and "<= 31" each fail one answer, and case
+            // 11 is the lowest valid date, which a "> 1" wrongly re-asks.
+            // Case 12 catches a year that is checked with isdigit() but
+            // never measured, and case 13 a year checked only by length.
+            // Case 14 is an empty answer, one part, which crashes the
+            // program that never counts. Case 15 rejects twenty answers in
+            // a row, which catches an if instead of a while and any loop
+            // capped at a fixed number of tries.
+            const CASES = [
+                date_case("Example 1 — 2026/12/07", ["2026/12/07"]),
+                date_case("Example 2 — an extra slash is re-asked, then 2026/12/07", [
+                    "2026//12/07", "2026/12/07",
+                ]),
+                date_case("Example 3 — month 13 and 1/7 are re-asked, then 2026/01/07", [
+                    "2026/13/07", "2026/1/7", "2026/01/07",
+                ]),
+                date_case("Example 4 — hello and 2026-12-07 are re-asked, then 0000/01/01", [
+                    "hello", "2026-12-07", "0000/01/01",
+                ]),
+                date_case("Example 5 — four parts are re-asked, then 2026/12/07", [
+                    "2026/12/07/07", "2026/12/07",
+                ]),
+                date_case("Example 6 — two parts are re-asked, then 2026/12/07", [
+                    "2026/12", "2026/12/07",
+                ]),
+                date_case("Example 7 — three empty parts are re-asked, then 2026/12/07", [
+                    "//", "2026/12/07",
+                ]),
+                date_case("Example 8 — a space in the day is re-asked, then 2026/12/07", [
+                    "2026/12/ 7", "2026/12/07",
+                ]),
+                date_case("Example 9 — day 00 and 29 are re-asked, then 2026/02/28", [
+                    "2026/12/00", "2026/02/29", "2026/02/28",
+                ]),
+                date_case("Example 10 — month 00 and 13 are re-asked, then 2026/12/15", [
+                    "2026/00/15", "2026/13/15", "2026/12/15",
+                ]),
+                date_case("Example 11 — 2026/01/01", ["2026/01/01"]),
+                date_case("Example 12 — 3- and 5-digit years are re-asked, then 0999/12/07", [
+                    "999/12/07", "12026/12/07", "0999/12/07",
+                ]),
+                date_case("Example 13 — a letter in the year is re-asked, then 9999/12/28", [
+                    "202a/12/07", "9999/12/28",
+                ]),
+                date_case("Example 14 — an empty answer is re-asked, then 2026/12/07", [
+                    "", "2026/12/07",
+                ]),
+                date_case("Example 15 — twenty answers are re-asked, then 2026/12/07", [
+                    ...REJECTED_MIX, "2026/12/07",
+                ]),
+            ];
+
+            // Both quote styles, and with or without the trailing space, so a
+            // student is graded on the prompt's wording rather than on which
+            // quote character they reached for.
+            function prompt_needles(prompt) {
+                const trimmed = prompt.trimEnd();
+                return [
+                    `input("${prompt}")`,
+                    `input('${prompt}')`,
+                    `input("${trimmed}")`,
+                    `input('${trimmed}')`,
+                ];
+            }
+
+            // Strings and comments are blanked before scanning, as in w4i2.
+            // The summary students paste in as a docstring is prose, and a
+            // sentence like "for each part in the list:" at the start of a
+            // line would otherwise read as a forbidden loop, while the
+            // handout's own "Uses no imports" row would read as an import.
+            // Docstrings and comments keep only their newlines, so the line
+            // numbers in the detail still match the editor; a one-line
+            // string keeps its quotes, so `date.split("/")` still parses as
+            // a call.
+            //
+            // An f-string is the exception: its braces hold code, and
+            // `print(f'Date: {"-".join(parts)}')` is a likely home for the
+            // join() call, so blanking the whole literal would cost the row.
+            // Group 1 is the prefix letters right before the quote (`f`,
+            // `rf`, or nothing), and group 2 the literal. For an f-string
+            // the text between the braces is kept, with its own literals
+            // blanked in turn, and the prose around them dropped.
+            const TRIPLE_QUOTED = /"""[\s\S]*?"""|'''[\s\S]*?'''/g;
+            const STRING_LITERAL = /([A-Za-z]{0,2})("(?:[^"\\\n]|\\.)*"|'(?:[^'\\\n]|\\.)*')/g;
+            const F_STRING_FIELD = /\{([^{}]*)\}/g;
+            const COMMENT = /#[^\n]*/g;
+            function blank_strings(source) {
+                return source.replace(STRING_LITERAL, (text, prefix, literal) => {
+                    if (!/[fF]/.test(prefix)) return `${prefix}""`;
+                    const fields = [...literal.matchAll(F_STRING_FIELD)]
+                        .map((field) => `{${blank_strings(field[1])}}`);
+                    return `${prefix}""${fields.join("")}`;
+                });
+            }
+            function code_only(source) {
+                return blank_strings(
+                    source.replace(TRIPLE_QUOTED, (text) => text.replace(/[^\n]/g, "")),
+                ).replace(COMMENT, "");
+            }
+
+            function line_of(source, index) {
+                return source.slice(0, index).split("\n").length;
+            }
+
+            // Line `line_number` of the student's source as they wrote it.
+            // Matching runs on the blanked source, but a detail that quoted
+            // that would show `date.split("")` for `date.split("/")`, and
+            // blanking keeps every newline, so the numbers line up.
+            function quote_line(context, line_number) {
+                return context.source.split("\n")[line_number - 1].trim();
+            }
+
+            // The first line matching `regex` as a failing row, or null when
+            // none does. `reason` is spliced in after the line number, and
+            // `advice` after the quoted line, so each row names what the
+            // line did and what to do instead.
+            function first_line_matching(context, source, regex, reason, advice) {
+                const lines = source.split("\n");
+                for (let index = 0; index < lines.length; index++) {
+                    if (!regex.test(lines[index])) continue;
+                    return {
+                        pass: false,
+                        detail:
+                            `Line ${index + 1} ${reason} ("${quote_line(context, index + 1)}"), ` +
+                            advice,
+                    };
+                }
+                return null;
+            }
+
+            // The first call to `regex` as a passing row, quoting its line,
+            // or a failing row that says the call is absent.
+            function call_row(context, source, regex, missing) {
+                const match = source.match(regex);
+                if (match === null) return { pass: false, detail: missing };
+                const line_number = line_of(source, match.index);
+                return {
+                    pass: true,
+                    detail: `Line ${line_number}: "${quote_line(context, line_number)}".`,
+                };
+            }
+
+            // Every `for` statement, anchored to the start of a line so the
+            // word inside a comment cannot count. Group 2 is the iterable up
+            // to the colon: `for i in range(len(parts)):` yields
+            // "range(len(parts))", and `for part in parts:` yields "parts".
+            const FOR_STATEMENT = /^[ \t]*for\s+(.+?)\s+in\s+(.+?)\s*:/gm;
+            const RANGE_CALL = /^range\s*\(/;
+            const SLICE = /\[[^\]\n]*:[^\]\n]*\]/;
+            const SPLIT_CALL = /\.split\s*\(/;
+
+            // Splitting the answer into parts and reading them by index is
+            // the practice, so two things that do it another way score zero
+            // even when split() is also called: a slice, which reads the
+            // year as date[0:4] without ever splitting, and a for loop over
+            // anything other than range(), since looping over the list
+            // itself has not been covered. The detail names the line, since
+            // the student needs to know which line cost them.
+            function split_check(context) {
+                const source = code_only(context.source);
+                for (const match of source.matchAll(FOR_STATEMENT)) {
+                    if (RANGE_CALL.test(match[2])) continue;
+                    const line_number = line_of(source, match.index);
+                    return {
+                        pass: false,
+                        detail:
+                            `Line ${line_number} loops directly over "${match[2]}" ` +
+                            `("${quote_line(context, line_number)}"), which has not been ` +
+                            "covered. Read the parts by index (parts[0], parts[1], " +
+                            "parts[2]) instead.",
+                    };
+                }
+                return (
+                    first_line_matching(
+                        context, source, SLICE, "takes a slice",
+                        'which skips the split. Break the answer into parts with split("/") instead.',
+                    ) ?? call_row(context, source, SPLIT_CALL, "No .split() call found.")
+                );
+            }
+
+            // try/except lets int() do the digit check by catching the
+            // crash, which has not been covered and is what isdigit() is
+            // for, so it zeroes the row even when isdigit() is also called.
+            const TRY_STATEMENT = /^[ \t]*try\s*:/;
+            const ISDIGIT_CALL = /\.isdigit\s*\(/;
+            function isdigit_check(context) {
+                const source = code_only(context.source);
+                return (
+                    first_line_matching(
+                        context, source, TRY_STATEMENT, "opens a try block",
+                        "which has not been covered. Check each part with isdigit() before calling int() instead.",
+                    ) ?? call_row(context, source, ISDIGIT_CALL, "No .isdigit() call found.")
+                );
+            }
+
+            // replace("/", "-") turns the answer into the output in one step
+            // without ever putting parts back together, so it zeroes the
+            // row even when join() is also called.
+            const REPLACE_CALL = /\.replace\s*\(/;
+            const JOIN_CALL = /\.join\s*\(/;
+            function join_check(context) {
+                const source = code_only(context.source);
+                return (
+                    first_line_matching(
+                        context, source, REPLACE_CALL, "calls .replace()",
+                        'which skips the join. Put the parts back together with "-".join(parts) instead.',
+                    ) ?? call_row(context, source, JOIN_CALL, "No .join() call found.")
+                );
+            }
+
+            // A module that parses dates does the whole problem, so an
+            // import is not a lost row but a zero for the submission, the
+            // same as a syntax error. The gate scans the same blanked source
+            // as the rows, so the rubric's "Uses no imports" line pasted
+            // into the docstring cannot trip it. Both statement forms, and
+            // only at the start of a line, so a variable named `from_part`
+            // does not count.
+            const IMPORT_STATEMENT = /^[ \t]*(?:import|from)\s+\w/;
+            function no_import_check(source) {
+                return (
+                    first_line_matching(
+                        { source }, code_only(source), IMPORT_STATEMENT, "imports a module",
+                        "which the program does not need: split(), isdigit(), len(), int(), and join() are all built in. An import scores zero.",
+                    ) ?? { pass: true, detail: "" }
+                );
+            }
+
+            function build_criteria(results) {
+                return [
+                    {
+                        id: "input",
+                        name: "Input handling",
+                        points: 5,
+                        description:
+                            "Source calls input() with the exact prompt text from the handout.",
+                        type: "code",
+                        needles: [prompt_needles(PROMPT)],
+                        mode: "all",
+                    },
+                    {
+                        id: "output",
+                        name: "Correct output",
+                        points: 15,
+                        description:
+                            "15 points split evenly across all examples, prorated by the % of lines that match exactly.",
+                        type: "output-diff",
+                        cases: CASES,
+                    },
+                    {
+                        // The examples already fail a program that asks a
+                        // fixed number of times, so this row is about writing
+                        // the validation loop. `while` has to open a line,
+                        // which keeps the word inside a comment or a string
+                        // from earning the points. This regex scans the raw
+                        // source, and every row's name is pasted back into it
+                        // as a docstring line, so no name may open with
+                        // `while`.
+                        id: "while",
+                        name: "Use of a while loop",
+                        points: 4,
+                        description:
+                            "Re-asking for an invalid date is done with a while loop rather than an if.",
+                        type: "code-regex",
+                        regex: /^[ \t]*while\b/m,
+                    },
+                    {
+                        id: "split",
+                        name: "Use of split()",
+                        points: 4,
+                        description:
+                            'The answer is broken into parts with split("/"), and the parts are read by index.',
+                        type: "custom",
+                        check: split_check,
+                    },
+                    {
+                        id: "isdigit",
+                        name: "Use of isdigit()",
+                        points: 4,
+                        description:
+                            "Each part is checked with isdigit() before it is converted with int().",
+                        type: "custom",
+                        check: isdigit_check,
+                    },
+                    {
+                        id: "join",
+                        name: "Use of join()",
+                        points: 4,
+                        description:
+                            'The parts are put back together with "-".join(...).',
+                        type: "custom",
+                        check: join_check,
+                    },
+                    {
+                        id: "flake8",
+                        name: "flake8",
+                        points: 4,
+                        description:
+                            "−1 point per flake8 finding, down to a floor of 0.",
+                        type: "flake8",
+                        partial: true,
+                    },
+                ];
+            }
+
+            // The right column only: w4p1.md fills the left, and the page
+            // carries its own footer below both.
+            grader_app.init({
+                filename: "w4-1.py",
+                editor: true,
+                title: "Submission",
+                subtitle: "Graded in this tab · nothing leaves your browser",
+                cases: CASES,
+                build_criteria,
+                gates: [
+                    {
+                        name: "Uses no imports",
+                        description:
+                            "Gate: importing a module forces a total score of zero, the same as a syntax error.",
+                        check: no_import_check,
+                    },
+                ],
+                max_auto_points: 40,
+                mount: "#grader",
+                handout: "w4p1.md",
+            });
+        </script>
+    </body>
+</html>
