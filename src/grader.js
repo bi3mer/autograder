@@ -35,6 +35,7 @@ import {
   DRAFT_SAVE_DELAY_MS,
   SOURCE_BYTES_MAX,
   STDIN_LINE_COUNT_MAX,
+  SUBMISSION_BYTES_MAX,
   TEST_CASE_COUNT_MAX,
 } from "./constants.js";
 
@@ -79,8 +80,8 @@ import {
  * - `styles_href`: another stylesheet, or `false` to link none. Defaults to
  *   `css/a1.css` beside this module.
  * - `element_ids`: overrides for any of `ELEMENT_IDS_DEFAULT`.
- * - `submit_to`: where the student uploads the file, named in the
- *   non-Python-file warning. Defaults to `"BrightSpace"`.
+ * - `submit_to`: where the student submits, named in the non-Python-file
+ *   warning and in the Copy button's note. Defaults to `"BrightSpace"`.
  *
  * A rubric row rendered from all that is `{ mark, state, name, description,
  * score, detail }`: the mark is `✓`, `±`, `✗`, or `—`, and the state is
@@ -97,7 +98,6 @@ const ELEMENT_IDS_DEFAULT = {
   zero: "zero",
   headline: "headline",
   summary_box: "summarybox",
-  summary: "summary",
   copy: "copy",
   copy_status: "copystatus",
 };
@@ -199,7 +199,6 @@ function resolve_elements(ids) {
     zero: require_element(ids.zero),
     headline: require_element(ids.headline),
     summary_box: require_element(ids.summary_box),
-    summary: require_element(ids.summary),
     copy: require_element(ids.copy),
     copy_status: require_element(ids.copy_status),
   };
@@ -406,6 +405,68 @@ function summary_text(args, rows) {
     "summary_text: one line per row plus the header",
   );
   return lines.join("\n");
+}
+
+/**
+ * Heads the blank lines a student fills in with the prompts they asked an AI.
+ * It carries its own instruction because the paste travels: by the time a
+ * student is looking at it, the handout that explained it is a tab away.
+ */
+const AI_PROMPT_HEADING = "AI prompts, one per line (write none if you asked none):";
+
+/**
+ * Blank bullets written under that heading. Three is a prompt-sized list to
+ * fill in and a small one to delete, and a student who asked more can add
+ * lines; the count only decides what the paste starts with.
+ */
+const AI_PROMPT_LINE_COUNT = 3;
+
+/**
+ * What the Copy button puts on the clipboard: the summary and the AI-prompt
+ * lines as one module docstring, one blank line, then the code that was
+ * graded.
+ *
+ * The button used to copy the summary alone, which left the student to build
+ * the submission by hand, and the paste that came back was as often the
+ * summary below the code, or above it without the quotes, as the docstring
+ * the handout asked for. The prompts arrived loose under the code for the
+ * same reason. Assembling all of it here removes the step they were getting
+ * wrong: what they paste is what the grader read, in the shape the handout
+ * wants, with somewhere to write the prompts that is already inside the
+ * docstring.
+ */
+export function submission_text(summary, source) {
+  assert_string(summary, "submission_text: summary", SOURCE_BYTES_MAX);
+  assert_string(source, "submission_text: source", SOURCE_BYTES_MAX);
+  // A `"""` in the summary would close the docstring early and leave the
+  // rest of it as code, so the paste would not even compile. Rubric row
+  // names are the only text that reaches here, so this is a config bug.
+  assert(
+    !summary.includes('"""'),
+    "submission_text: summary must not contain a triple quote",
+  );
+  // A trailing backslash would escape the closing quote the same way.
+  assert(
+    !summary.endsWith("\\"),
+    "submission_text: summary must not end with a backslash",
+  );
+  // Leading blank lines would push the code away from its docstring, and
+  // trailing whitespace is what flake8 W391 flags on the file already graded.
+  const code = source.replace(/^(?:[ \t]*\n)+/, "").replace(/\s+$/, "");
+  const prompts = [AI_PROMPT_HEADING];
+  // A bare dash rather than "- ", so a line left unfilled carries no trailing
+  // space, and a student typing after it has to add the space themselves.
+  for (let index = 0; index < AI_PROMPT_LINE_COUNT; index++) prompts.push("-");
+  assert(
+    prompts.length === AI_PROMPT_LINE_COUNT + 1,
+    "submission_text: one blank line per prompt, plus the heading",
+  );
+  const paste = `"""\n${summary}\n\n${prompts.join("\n")}\n"""\n\n${code}\n`;
+  assert(
+    paste.length <= SUBMISSION_BYTES_MAX,
+    `submission_text: paste exceeds ${SUBMISSION_BYTES_MAX} chars: ${paste.length}`,
+  );
+  return paste;
 }
 
 function read_file_text(file) {
@@ -648,7 +709,7 @@ function reset_output(session) {
   elements.rubric.innerHTML = "";
   elements.zero.style.display = "none";
   elements.summary_box.style.display = "none";
-  elements.summary.value = "";
+  session.submission = "";
   elements.headline.textContent = "—";
   assert(
     elements.rubric.innerHTML === "",
@@ -803,38 +864,74 @@ async function grade_submission(session) {
 
   elements.rubric.innerHTML = rows.map(row_html).join("");
   elements.headline.textContent = String(total_points);
-  elements.summary.value = summary_text(
-    {
-      filename: config.filename,
-      total_points,
-      max_auto_points: config.max_auto_points,
-      zero_reason,
-    },
-    rows,
+  session.submission = submission_text(
+    summary_text(
+      {
+        filename: config.filename,
+        total_points,
+        max_auto_points: config.max_auto_points,
+        zero_reason,
+      },
+      rows,
+    ),
+    session.source,
   );
   elements.summary_box.style.display = "block";
   elements.copy_status.textContent = "";
 }
 
 /**
- * Falls back to the legacy selection copy, because a browser may refuse the
- * async clipboard on a page opened over `file://`.
+ * The legacy copy path, for a browser that refuses the async clipboard on a
+ * page opened over `file://`. `execCommand` copies a selection and nothing
+ * else, so it needs a real element holding the text; the scratch textarea is
+ * off-screen rather than `display:none` because the browser will not select
+ * inside an element it never laid out, and it is removed either way.
  */
-async function copy_summary(session) {
-  assert(session != null, "copy_summary: session must not be null");
+function copy_by_selection(text) {
+  assert_string(text, "copy_by_selection: text", SUBMISSION_BYTES_MAX);
+  const scratch = document.createElement("textarea");
+  scratch.value = text;
+  scratch.readOnly = true;
+  scratch.setAttribute("aria-hidden", "true");
+  scratch.style.position = "fixed";
+  scratch.style.top = "0";
+  scratch.style.left = "-10000px";
+  document.body.appendChild(scratch);
+  try {
+    scratch.select();
+    return document.execCommand("copy");
+  } finally {
+    scratch.remove();
+  }
+}
+
+/**
+ * Puts the whole submission on the clipboard: the summary as a docstring,
+ * then the code. The page no longer shows the text anywhere, so when both
+ * clipboard paths refuse, the paste goes to the console: that is the only
+ * copy left, and a student who has come this far can be talked through it.
+ */
+async function copy_submission(session) {
+  assert(session != null, "copy_submission: session must not be null");
   const { elements } = session;
-  const text = elements.summary.value;
-  assert(typeof text === "string", "copy_summary: summary must be a string");
+  const text = session.submission;
+  assert(
+    typeof text === "string" && text.length > 0,
+    "copy_submission: nothing has been graded yet",
+  );
   try {
     await navigator.clipboard.writeText(text);
     elements.copy_status.textContent = "Copied!";
+    return;
   } catch (error) {
-    elements.summary.select();
-    const copied = document.execCommand("copy");
-    elements.copy_status.textContent = copied
-      ? "Copied!"
-      : `Copy failed (${reason_for(error)}) — select the text and copy manually.`;
+    if (copy_by_selection(text)) {
+      elements.copy_status.textContent = "Copied!";
+      return;
+    }
+    elements.copy_status.textContent =
+      `Copy failed (${reason_for(error)}). The paste is in the browser console.`;
   }
+  console.log(session.submission);
 }
 
 function wire_file_input(session) {
@@ -890,7 +987,7 @@ function wire_buttons(session) {
     }
   });
 
-  elements.copy.addEventListener("click", () => void copy_summary(session));
+  elements.copy.addEventListener("click", () => void copy_submission(session));
 }
 
 async function boot(session) {
@@ -932,6 +1029,7 @@ function ensure_page(config, ids, editor_ids) {
     drop_prompt: config.drop_prompt ?? `Drop ${config.filename} here`,
     drop_hint: config.drop_hint,
     accept: config.accept,
+    submit_to: config.submit_to,
     footer: config.footer,
     mount: resolve_mount(config.mount, "init"),
   });
@@ -969,6 +1067,7 @@ export function init(config) {
     manual_rows: config.manual_rows ?? [],
     gates: config.gates ?? [],
     source: null,
+    submission: "",
     grading: false,
     // Everything below belongs to the editor, and stays null without one.
     editor_config,

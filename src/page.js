@@ -26,7 +26,8 @@ import { escape_html } from "./html.js";
  * (the heading), and the optional `subtitle`, `headline_label` (the caption
  * under the score, e.g. `"/ 45 auto"`), `drop_prompt` (the bold line in the
  * drop zone), `drop_hint` (the small line under it), `accept` (the file
- * input's `accept` attribute), and `footer`, which is omitted when absent.
+ * input's `accept` attribute), `submit_to` (named in the Copy button's note),
+ * and `footer`, which is omitted when absent.
  *
  * `editor_ids` is what turns the editor on: absent, the sheet is exactly what
  * it was before, so a page that never asked for one carries none of its
@@ -34,6 +35,9 @@ import { escape_html } from "./html.js";
  */
 
 const DROP_HINT_DEFAULT = "or click to choose a file · runs entirely in your browser";
+
+/** Where the student pastes what the Copy button hands them. */
+const SUBMIT_TO_DEFAULT = "BrightSpace";
 
 /**
  * This module's own URL, which is the anchor for finding `css/a1.css` beside
@@ -272,6 +276,15 @@ function body_html(options) {
   const prompt = options.drop_prompt ?? "Drop your submission here";
   const hint = options.drop_hint ?? DROP_HINT_DEFAULT;
   const editor = options.editor_ids != null ? editor_html(options) : "";
+  const submit_to = options.submit_to ?? SUBMIT_TO_DEFAULT;
+  // The indentation warning is here rather than only in the handout because
+  // this is the line a student reads with the paste already on the clipboard.
+  // A rich-text box drops the leading spaces, and the code arrives unrunnable.
+  const submit_note = `Puts the summary and your code on the clipboard as one `
+    + `paste: the summary inside a docstring, your code below it. Fill in the `
+    + `AI prompt lines inside the docstring before you submit. Paste into `
+    + `${submit_to} as plain text (Ctrl+Shift+V, or Cmd+Shift+V on a Mac) or `
+    + `inside a code block.`;
   return `
     <div class="body">
       ${editor}
@@ -293,13 +306,13 @@ function body_html(options) {
 
       <div class="summarybox" id="${ids.summary_box}" style="display:none">
         <div class="summarybox-head">
-          <span class="word">Summary</span>
+          <span class="word">Ready to submit</span>
           <span class="copy-wrap">
             <span class="status" id="${ids.copy_status}"></span>
-            <button id="${ids.copy}" class="ghost">Copy to clipboard</button>
+            <button id="${ids.copy}" class="ghost">Copy for submission</button>
           </span>
         </div>
-        <textarea id="${ids.summary}" readonly spellcheck="false"></textarea>
+        <p class="summarybox-note">${escape_html(submit_note)}</p>
       </div>
     </div>`;
 }
@@ -330,7 +343,7 @@ export function render_skeleton(options) {
     "render_skeleton: the grade button must exist after rendering",
   );
   assert(
-    document.getElementById(options.ids.summary) != null,
-    "render_skeleton: the summary box must exist after rendering",
+    document.getElementById(options.ids.copy) != null,
+    "render_skeleton: the copy button must exist after rendering",
   );
 }

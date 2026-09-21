@@ -15,6 +15,16 @@
 /** In bytes, which for a JS string means UTF-16 code units. */
 export const SOURCE_BYTES_MAX = 1024 * 1024;
 
+/**
+ * The submission the Copy button assembles: the summary as a docstring, then
+ * the source. A source that exactly reaches `SOURCE_BYTES_MAX` is graded
+ * rather than turned away, so the paste around it is necessarily larger than
+ * that, and bounding both by the same number would fail the copy on a file
+ * the grader had just scored. The summary carries its own `SOURCE_BYTES_MAX`
+ * bound, so the two together are what bounds the paste.
+ */
+export const SUBMISSION_BYTES_MAX = 2 * SOURCE_BYTES_MAX;
+
 /** Captured stdout for one test case, in bytes. */
 export const OUTPUT_BYTES_MAX = 1024 * 1024;
 

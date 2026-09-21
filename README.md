@@ -3,9 +3,9 @@
 A browser-side autograder for introductory Python assignments. A student drops
 `program1.py` onto the page, the page runs it under Pyodide (CPython compiled
 to WebAssembly), diffs the output against the assignment's examples, lints it
-with flake8, and prints a rubric plus a copy-paste summary. Nothing is
-uploaded: the Python runtime, the student's code, and the grading all live in
-the browser tab.
+with flake8, and prints a rubric plus a Copy button that hands back the whole
+submission, summary docstring and all. Nothing is uploaded: the Python
+runtime, the student's code, and the grading all live in the browser tab.
 
 There is no build step and no dependencies. The browser loads `src/` as ES
 modules, GitHub Pages serves the repository tree as it stands, and the tests
@@ -66,8 +66,8 @@ import { grade } from "../src/rubric.js";
 A page that already contains the grader elements keeps its own markup:
 `init()` renders the skeleton only when `#run` is absent. The generated
 elements carry the ids `status`, `run`, `drop`, `file`, `filename`, `rubric`,
-`zero`, `headline`, `summarybox`, `summary`, `copy`, and `copystatus`, which
-`element_ids` can override. A hand-written page missing one of them fails an
+`zero`, `headline`, `summarybox`, `copy`, and `copystatus`, which `element_ids`
+can override. A hand-written page missing one of them fails an
 assertion at startup rather than throwing `null` errors later.
 
 ## Handouts in Markdown
@@ -138,6 +138,49 @@ the author typed rather than as an anchor.
 A handout that fails to load says why, in the space the prose would have
 filled, and the grader beside it keeps working.
 
+## What the Copy Button Hands Back
+
+Grading ends with one button, **Copy for submission**. It puts the summary,
+blank lines for the prompts a student asked an AI, and the graded source on
+the clipboard as a single paste.
+
+    """
+    w4-i1.py — Autograder Summary
+    Score: 40 / 40
+
+    - Compiles without syntax errors: OK
+    - flake8: 5 / 5
+
+    AI prompts, one per line (write none if you asked none):
+    -
+    -
+    -
+    """
+
+    text = input("Enter a string: ")
+
+The button used to copy the summary on its own, next to a read-only textarea
+holding it, and the submission that came back was as often the summary below
+the code, or above it without the quotes, as the docstring the handout asked
+for. The prompts arrived loose under the code for the same reason.
+`submission_text` in `src/grader.js` assembles all of it instead, so what a
+student pastes is what the grader read, in the shape the handout wants, with
+somewhere to write the prompts that is already inside the docstring.
+
+`submit_to` names the destination in the line under the button, and defaults
+to `BrightSpace`. That line also tells the student to paste as plain text or
+inside a code block, because a rich-text box drops the leading spaces and the
+code arrives unrunnable. The handouts carry the same instruction with its
+reasoning spelled out.
+
+The async clipboard is the first path; a page opened over `file://` may refuse
+it, so a scratch textarea and `document.execCommand` follow, and a total
+failure logs the paste to the console.
+
+Every handout with a submission section prints this same example, and
+`test/test_grader.js` pins the shape, so the docstring a student is shown is
+the docstring the button writes.
+
 ## The Editor
 
 An assignment can carry an editor, so a student writes, runs, and grades in one
@@ -160,8 +203,8 @@ writing the program from nothing is the assignment. `cs230/w2p2.html` is the
 page that uses it; everything else passes `editor: false` and is untouched.
 
 **Run is not Grade.** Grade does what it always did: every example, the whole
-rubric, a copyable summary. Run executes the buffer once against one example and
-shows the transcript. A student who has to spend a grading run to discover a
+rubric, a submission to copy. Run executes the buffer once against one example
+and shows the transcript. A student who has to spend a grading run to discover a
 misspelled prompt starts guessing instead of iterating.
 
 Run pulls its input from the same `cases` the rubric scores against. Picking an
