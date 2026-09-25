@@ -14,8 +14,8 @@
 import { assert, assert_array, assert_range, assert_string } from "./assert.js";
 import {
   FILENAME_CHARS_MAX, LINE_COUNT_MAX, LINE_LENGTH_CHARS_DEFAULT, LINE_LENGTH_CHARS_MAX,
-  LINT_FILENAME, LINT_FINDING_COUNT_MAX, OUTPUT_BYTES_MAX, RUN_TIMEOUT_MS,
-  RUN_TIMEOUT_MS_MAX, SOURCE_BYTES_MAX, STDIN_LINE_COUNT_MAX,
+  LINT_FILENAME, LINT_FINDING_COUNT_MAX, OUTPUT_BYTES_MAX, RANDINT_VALUE_COUNT_MAX,
+  RUN_TIMEOUT_MS, RUN_TIMEOUT_MS_MAX, SOURCE_BYTES_MAX, STDIN_LINE_COUNT_MAX,
   SUBMISSION_FILENAME_DEFAULT, TRACE_CHECK_INTERVAL_EVENTS,
 } from "./constants.js";
 
@@ -190,19 +190,33 @@ export function flake8_failure_reason() {
  * which is the most common way a first attempt fails here. And the watchdog
  * stops a loop that never ends, which would otherwise freeze the tab: Pyodide
  * runs on the page's only thread, so there is nothing left to cancel it with.
+ *
+ * `randint_values`, when not empty, replaces `random.randint` for this run
+ * with one that returns those values in order, whatever its arguments. A
+ * program that picks a random number prints a different transcript every
+ * run, and a transcript that changes cannot be diffed; seeding the generator
+ * instead would tie each case to whatever Mersenne Twister makes of a seed.
+ * The `random` module outlives the run, since every run shares one
+ * interpreter, so the real function goes back in the `finally`.
  */
-function build_run_python(code, stdin_lines, filename, timeout_ms) {
+function build_run_python(code, stdin_lines, filename, timeout_ms, randint_values) {
   assert(typeof code === "string", "build_run_python: code must be a string");
   assert(Array.isArray(stdin_lines), "build_run_python: stdin_lines must be an array");
+  assert(Array.isArray(randint_values), "build_run_python: randint_values must be an array");
   assert_range(timeout_ms, "build_run_python: timeout_ms", 1, RUN_TIMEOUT_MS_MAX);
   return `
-import sys, io, json, time, builtins, traceback, linecache
+import sys, io, json, time, random, builtins, traceback, linecache
 
 _name = ${JSON.stringify(filename)}
 _src = json.loads(${embed(code)})
 linecache.cache[_name] = (len(_src), None, _src.splitlines(True), _name)
 
 class _OutOfInput(Exception):
+    def __init__(self, asked, have):
+        self.asked = asked
+        self.have = have
+
+class _OutOfRandint(Exception):
     def __init__(self, asked, have):
         self.asked = asked
         self.have = have
@@ -238,6 +252,21 @@ def _fake_input(prompt=""):
     return _val
 
 builtins.input = _fake_input
+
+_randint_values = json.loads(${embed(randint_values)})
+_randint_next = iter(_randint_values)
+_randint_asked = [0]
+_randint_real = random.randint
+
+def _fake_randint(a, b):
+    _randint_asked[0] += 1
+    try:
+        return next(_randint_next)
+    except StopIteration:
+        raise _OutOfRandint(_randint_asked[0], len(_randint_values)) from None
+
+if _randint_values:
+    random.randint = _fake_randint
 
 # Reading the clock on every line costs more than the check saves, so the
 # counter samples it instead.
@@ -280,6 +309,13 @@ except _OutOfInput as _e:
         _line = _frames[-1].lineno
     _err = ("RUNTIME:Your program called input() %d time(s), but this run only "
             "supplies %d line(s) of input." % (_e.asked, _e.have))
+except _OutOfRandint as _e:
+    _kind = "input"
+    _frames = _own_frames()
+    if _frames:
+        _line = _frames[-1].lineno
+    _err = ("RUNTIME:Your program called random.randint() %d time(s), but this run "
+            "only supplies %d value(s)." % (_e.asked, _e.have))
 except _TookTooLong:
     _kind = "timeout"
     _err = ("RUNTIME:Your program was still running after ${timeout_ms} ms, so it was "
@@ -301,6 +337,7 @@ except BaseException as _e:
             + "".join(traceback.format_exception_only(type(_e), _e)))
 finally:
     sys.stdout = _old
+    random.randint = _randint_real
 json.dumps({"out": _out.getvalue(), "err": _err, "prompts": _prompts,
             "kind": _kind, "line": _line, "col": _col})
 `;
@@ -312,6 +349,9 @@ json.dumps({"out": _out.getvalue(), "err": _err, "prompts": _prompts,
  * A student program that raises is not an error here: the traceback comes
  * back in `err` and the rubric decides what it costs. Only a broken runner
  * throws.
+ *
+ * `options` takes `filename`, `timeout_ms`, and `randint_values`, the
+ * numbers `random.randint` returns in call order (see `build_run_python`).
  */
 export async function run(code, stdin_lines, options = {}) {
   assert(is_ready(), "run: called before init() resolved");
@@ -325,10 +365,19 @@ export async function run(code, stdin_lines, options = {}) {
   const timeout_ms = assert_range(
     options.timeout_ms ?? RUN_TIMEOUT_MS, "run: timeout_ms", 1, RUN_TIMEOUT_MS_MAX,
   );
+  const randint_values = assert_array(
+    options.randint_values ?? [], "run: randint_values", RANDINT_VALUE_COUNT_MAX,
+  );
+  for (let index = 0; index < randint_values.length; index++) {
+    assert(
+      Number.isSafeInteger(randint_values[index]),
+      `run: randint_values[${index}] must be an integer`,
+    );
+  }
 
   assert(pyodide != null, "run: interpreter must be loaded");
   const encoded = await pyodide.runPythonAsync(
-    build_run_python(code, stdin_lines, filename, timeout_ms),
+    build_run_python(code, stdin_lines, filename, timeout_ms, randint_values),
   );
   assert(typeof encoded === "string", "run: driver must return a JSON string");
   const result = JSON.parse(encoded);

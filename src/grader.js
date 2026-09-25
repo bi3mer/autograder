@@ -33,6 +33,7 @@ import {
   NEEDLE_CHARS_MAX,
   POINTS_MAX,
   DRAFT_SAVE_DELAY_MS,
+  RANDINT_VALUE_COUNT_MAX,
   SOURCE_BYTES_MAX,
   STDIN_LINE_COUNT_MAX,
   SUBMISSION_BYTES_MAX,
@@ -46,9 +47,10 @@ import {
  *   inside Pyodide (so tracebacks read `program1.py`), heads the copyable
  *   summary, and fills the default drop prompt. The upload itself is only
  *   checked for a `.py` extension, not for this exact name.
- * - `cases`: `{ name, stdin_lines, expected_lines }` per example, run in
- *   order. `cases[0].stdin_lines` also drives the syntax-error probe that
- *   gates the whole run.
+ * - `cases`: `{ name, stdin_lines, expected_lines, randint_values }` per
+ *   example, run in order. `randint_values` is optional: the numbers
+ *   `random.randint` returns, call by call, for a program that picks one.
+ *   `cases[0]` also drives the syntax-error probe that gates the whole run.
  * - `build_criteria(results)`: returns the rubric `rubric.grade` scores.
  * - `max_auto_points`: the denominator shown beside the total.
  * - `manual_rows`: instructor-graded rows, not totalled, each
@@ -279,6 +281,11 @@ function check_config(config) {
       test_case.expected_lines,
       `config.cases[${index}].expected_lines`,
       STDIN_LINE_COUNT_MAX,
+    );
+    assert_array(
+      test_case.randint_values ?? [],
+      `config.cases[${index}].randint_values`,
+      RANDINT_VALUE_COUNT_MAX,
     );
   }
   assert(
@@ -580,10 +587,13 @@ async function run_once(session) {
   elements.console.innerHTML = "";
   try {
     const stdin_lines = editor_box.stdin_lines_from_text(elements.stdin.value);
+    // "Input of my own" has no case, so randint stays random there.
+    const test_case = selected_case(session);
     const result = await py_runner.run(session.source, stdin_lines, {
       filename: session.config.filename,
+      randint_values: test_case?.randint_values ?? [],
     });
-    elements.console.innerHTML = run_console_html(session, result, selected_case(session));
+    elements.console.innerHTML = run_console_html(session, result, test_case);
     elements.run_status.textContent = result.err === "" ? "Ran." : "Stopped.";
   } catch (error) {
     // A throw here is a runner bug, not a student mistake. Say so, then let it
@@ -794,6 +804,15 @@ async function accept_file(session, file) {
   elements.status.textContent = "File loaded. Ready to grade.";
 }
 
+/** One case, run the way grading runs it: its stdin and its randint values. */
+function run_case(config, source, test_case) {
+  assert(test_case != null, "run_case: test_case must not be null");
+  return py_runner.run(source, test_case.stdin_lines, {
+    filename: config.filename,
+    randint_values: test_case.randint_values ?? [],
+  });
+}
+
 async function score_submission(session) {
   assert(session.source != null, "score_submission: no submission loaded");
   const { config } = session;
@@ -801,10 +820,7 @@ async function score_submission(session) {
 
   const results = [];
   for (let index = 0; index < config.cases.length; index++) {
-    const stdin_lines = config.cases[index].stdin_lines;
-    results.push(
-      await py_runner.run(source, stdin_lines, { filename: config.filename }),
-    );
+    results.push(await run_case(config, source, config.cases[index]));
   }
   assert(
     results.length === config.cases.length,
@@ -830,13 +846,7 @@ async function grade_submission(session) {
   const { config, elements } = session;
   reset_output(session);
 
-  const probe = await py_runner.run(
-    session.source,
-    config.cases[0].stdin_lines,
-    {
-      filename: config.filename,
-    },
-  );
+  const probe = await run_case(config, session.source, config.cases[0]);
   const rows = [row_for_syntax(probe)];
   let zero_reason = probe.err.startsWith(SYNTAX_PREFIX) ? "syntax error" : null;
   for (let index = 0; index < session.gates.length; index++) {

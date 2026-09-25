@@ -307,6 +307,13 @@ many needles were found. An `output-diff` case awards points in proportion to
 how many lines match. A `flake8` criterion with `partial: true` deducts one
 point per finding, with a floor of zero.
 
+A program that picks a random number prints a different transcript every run,
+so a case can carry `randint_values`: the numbers `random.randint` returns
+for that run, call by call, whatever its arguments. The runner puts the real
+function back afterwards, and a program that calls it more often than the
+case supplies stops with a sentence saying so. `cs230/w5p1.html` uses it to
+fix each example's secret.
+
 A construct an assignment forbids outright goes in `gates` rather than in a
 criterion, because a criterion's zero leaves the rest of the score standing.
 Each gate is `{ name, description, check }`, and `check(source)` returns

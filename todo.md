@@ -93,3 +93,48 @@ Once a draft exists there is no way back to the starter short of clearing
 `localStorage`; a "Reset to starter" button is the follow-up. Until then a
 student who mangles the starter re-copies it from the handout, which is what
 they do today, so nothing is lost.
+
+## Click-to-Reveal Hints in Handouts
+
+A handout hint is plain text today (`cs230/w3p1.md:3`, `cs230/w4i1.md:15`),
+so the student reads it whether they wanted it or not. The browser's
+`<details><summary>Hint</summary>...</details>` hides its body until the
+summary is clicked, with no JavaScript, and the grader already uses it for
+diffs (`details.diff` in `css/a1.css`). Writing it into the `.md` does not
+work: `src/markdown.js` escapes raw HTML, and `assert_tags_allowed` rejects
+any tag outside `TAGS_ALLOWED`. The renderer needs a syntax of its own.
+
+Use GitHub's callout form on a blockquote, so the `.md` still reads as plain
+text. Text after the marker, if any, becomes the summary label:
+
+```markdown
+> [!HINT]
+> `len()` gives the number of characters in a string.
+
+> [!HINT] Stuck on the loop?
+> Read the guess again at the bottom of the loop body.
+```
+
+About 25 lines across four files:
+
+- `src/markdown.js`: in `render_blockquote`, after `inner` is collected,
+  test `inner[0]` against `/^\[!HINT\][ \t]*(.*)$/i`. On a match, emit
+  `<details class="hint">`, a `<summary>` holding `inline(label)` (default
+  `Hint`), and `render_blocks(inner.slice(1), depth + 1)`, then return
+  `scan`. Any other blockquote renders as now.
+- `src/markdown.js`: add `"details"` and `"summary"` to `TAGS_ALLOWED`, or
+  the postcondition throws on the first hint. Add the syntax to the
+  supported-subset list in the module comment.
+- `css/a1.css`: a `.prose details.hint` rule beside the other `.prose` rules,
+  with `cursor: pointer` on its `summary`, as `details.diff summary` has.
+- `test/test_markdown.js`: next to the blockquote test, cover a hint with
+  the default label, one with a custom label, a hint indented under a list
+  item, and a plain `>` quote that still renders as `<blockquote>`. One
+  sentence in the README's "Handouts in Markdown" section.
+
+A hint works inside a list item already: an item longer than one line goes
+back through `render_blocks` (`render_item`), so a quote indented under the
+item renders as a hint. That covers the bullet in `w4i1.md`. The hint in
+`w3p1.md` sits mid-paragraph in parentheses and has to move into its own
+block. Verify the click in the browser, since `test_markdown.js` checks only
+the markup.

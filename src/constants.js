@@ -42,6 +42,9 @@ export const LINE_COUNT_MAX = 100_000;
 /** Stdin lines fed to one run. */
 export const STDIN_LINE_COUNT_MAX = 1024;
 
+/** Values `random.randint` hands back in one run, in call order. */
+export const RANDINT_VALUE_COUNT_MAX = 1024;
+
 export const TEST_CASE_COUNT_MAX = 64;
 
 export const CRITERION_COUNT_MAX = 128;

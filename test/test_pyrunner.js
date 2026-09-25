@@ -187,6 +187,29 @@ test("the driver carries what a beginner needs to read their own mistake", async
   assert.ok(driver.includes("sys.settrace(_watchdog)"), "a loop that never ends must be stopped");
 });
 
+test("run hands randint the case's values and puts the real one back", async () => {
+  const { py_runner, interpreter } = await ready_runner(canned({ out: "", err: "", prompts: [] }));
+  await py_runner.run("print(1)", [], { randint_values: [37, 5] });
+  const driver = interpreter.python.at(-1);
+  assert.ok(driver.includes(JSON.stringify(JSON.stringify([37, 5]))));
+  assert.ok(driver.includes("random.randint = _fake_randint"));
+  // Every run shares one interpreter, so a patch left behind would feed the
+  // next case this case's secret.
+  assert.ok(driver.includes("    random.randint = _randint_real\n"), "restored in the finally");
+  assert.ok(driver.includes("raise _OutOfRandint"), "running out of values must be a sentence");
+
+  await py_runner.run("print(1)", []);
+  assert.ok(interpreter.python.at(-1).includes(JSON.stringify(JSON.stringify([]))));
+  await assert.rejects(
+    () => py_runner.run("print(1)", [], { randint_values: [1.5] }),
+    /randint_values\[0\] must be an integer/,
+  );
+  await assert.rejects(
+    () => py_runner.run("print(1)", [], { randint_values: 37 }),
+    /randint_values must be an array/,
+  );
+});
+
 test("run defaults the deadline and rejects one outside the ceiling", async () => {
   const { py_runner, interpreter } = await ready_runner(canned({ out: "", err: "", prompts: [] }));
   await py_runner.run("print(1)", []);
