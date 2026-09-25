@@ -1,0 +1,368 @@
+<!doctype html>
+<html lang="en">
+    <head>
+        <meta charset="UTF-8" />
+        <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+        <title>Yes or No Function Autograder</title>
+        <link rel="stylesheet" href="../css/a1.css" />
+        <script src="https://cdn.jsdelivr.net/pyodide/v0.26.2/full/pyodide.js"></script>
+    </head>
+    <body>
+        <div class="split">
+            <section class="sheet">
+                <!-- The whole problem statement, fetched from w5i1.md and
+                     rendered by src/markdown.js. The file is the handout,
+                     readable on its own. -->
+                <div class="prose" id="handout"></div>
+            </section>
+
+            <section id="grader"></section>
+        </div>
+        <footer>bi3mer · Runs Python via Pyodide</footer>
+
+        <script type="module">
+            import { grader_app } from "../src/main.js";
+            import { assert } from "../src/assert.js";
+
+            // w3p1's prompt, since this is that loop moved into a function.
+            // It drives both the input() needle the rubric looks for and the
+            // transcript each case expects, so the wording is written once
+            // here. The handout quotes it again in w5i1.md, which is the one
+            // place the two can drift.
+            const PROMPT = "Yes or no? ";
+
+            function valid_answer(answer) {
+                return answer === "yes" || answer === "no";
+            }
+
+            // A case is the answers typed at the prompt, in order. Every
+            // answer is echoed after the prompt; the last one is valid and
+            // the ones before are rejected, so the transcript is generated
+            // from the answers. The program's last line is the handout's
+            // print(yes_or_no()), and Python prints a bool as True or False,
+            // so a function that returns the typed string, returns None, or
+            // prints inside itself ends the transcript on the wrong line.
+            // Each answer is asserted so a case the handout would not reject
+            // fails at startup rather than grading every correct submission
+            // down. The output criterion sets no anchor_prefix on purpose:
+            // the number of prompt lines is the evidence that the loop
+            // re-asked, so the echoes have to be graded too.
+            function yes_no_case(name, answers) {
+                const answer = answers[answers.length - 1];
+                assert(valid_answer(answer), `yes_no_case "${name}": last answer must be yes or no`);
+                for (const rejected of answers.slice(0, -1)) {
+                    assert(!valid_answer(rejected), `yes_no_case "${name}": "${rejected}" is a valid answer`);
+                }
+                return {
+                    name,
+                    stdin_lines: answers,
+                    expected_lines: [
+                        ...answers.map((typed) => PROMPT + typed),
+                        answer === "yes" ? "True" : "False",
+                    ],
+                };
+            }
+
+            // Cases 1-4 are the handout's examples. Case 3 rejects three
+            // answers in a row, which catches an if instead of a while, and
+            // case 4's "Yes" catches .lower(). Cases 5 and 7 put a space
+            // before "yes" and after "no", which a .strip() accepts. Case 6
+            // catches a test that looks only at the first letter or for
+            // "yes" anywhere in the answer. Case 8 is an empty answer, which
+            // crashes a first-letter test written as answer[0]. Case 9
+            // rejects a hundred answers, which catches a loop capped at a
+            // fixed number of tries.
+            const CASES = [
+                yes_no_case("Example 1 — yes", ["yes"]),
+                yes_no_case("Example 2 — no", ["no"]),
+                yes_no_case("Example 3 — n, NO, and a sentence are re-asked, then no", [
+                    "n", "NO", "I said no!", "no",
+                ]),
+                yes_no_case("Example 4 — maybe and Yes are re-asked, then yes", [
+                    "maybe", "Yes", "yes",
+                ]),
+                yes_no_case("Example 5 — a leading space is re-asked, then yes", [" yes", "yes"]),
+                yes_no_case("Example 6 — yesterday is re-asked, then no", ["yesterday", "no"]),
+                yes_no_case("Example 7 — a trailing space is re-asked, then no", ["no ", "no"]),
+                yes_no_case("Example 8 — an empty answer is re-asked, then no", ["", "no"]),
+                yes_no_case("Example 9 — a hundred answers are re-asked, then yes", [
+                    ...Array.from({ length: 100 }, (_, index) => `bad${index}`),
+                    "yes",
+                ]),
+            ];
+
+            // Both quote styles, and with or without the trailing space, so a
+            // student is graded on the prompt's wording rather than on which
+            // quote character they reached for.
+            function prompt_needles(prompt) {
+                const trimmed = prompt.trimEnd();
+                return [
+                    `input("${prompt}")`,
+                    `input('${prompt}')`,
+                    `input("${trimmed}")`,
+                    `input('${trimmed}')`,
+                ];
+            }
+
+            // Strings and comments are blanked before scanning, as in w4i2.
+            // The summary students paste in as a docstring is prose, and its
+            // "Defines yes_or_no()" line would otherwise read as the def, and
+            // a print("yes or no, not in between") as the `in` operator.
+            // Docstrings and comments keep only their newlines, so the line
+            // numbers in the detail still match the editor; a one-line
+            // string keeps its quotes and any prefix, so `return "yes"`
+            // still reads as returning a string.
+            const TRIPLE_QUOTED = /"""[\s\S]*?"""|'''[\s\S]*?'''/g;
+            const SINGLE_QUOTED = /"(?:[^"\\\n]|\\.)*"|'(?:[^'\\\n]|\\.)*'/g;
+            const COMMENT = /#[^\n]*/g;
+            function code_only(source) {
+                return source
+                    .replace(TRIPLE_QUOTED, (text) => text.replace(/[^\n]/g, ""))
+                    .replace(SINGLE_QUOTED, '""')
+                    .replace(COMMENT, "");
+            }
+
+            // Line `line_number` of the student's source as they wrote it.
+            // Matching runs on the blanked source, but a detail that quoted
+            // that would show `input("")` for `input("Yes or no? ")`, and
+            // blanking keeps every newline, so the numbers line up.
+            function quote_line(context, line_number) {
+                return context.source.split("\n")[line_number - 1].trim();
+            }
+
+            function failing_line(context, line_number, reason, advice) {
+                return {
+                    pass: false,
+                    detail:
+                        `Line ${line_number} ${reason} ("${quote_line(context, line_number)}"). ` +
+                        advice,
+                };
+            }
+
+            // The def of yes_or_no and the lines of its body, as
+            // `{ line_number, body: [{ line_number, text }] }`, or null when
+            // the source defines no such function. The body is every line
+            // after the def that is blank or indented past it, up to the
+            // first line that is not, which is where Python ends the block.
+            // Any indent is accepted for the def itself, so a function nested
+            // by mistake is still found and its body still scanned.
+            const DEF_YES_OR_NO = /^([ \t]*)def\s+yes_or_no\s*\(/;
+            const LEADING_SPACE = /^[ \t]*/;
+            function yes_or_no_body(source) {
+                const lines = source.split("\n");
+                for (let index = 0; index < lines.length; index++) {
+                    const match = lines[index].match(DEF_YES_OR_NO);
+                    if (match === null) continue;
+                    const def_indent = match[1].length;
+                    const body = [];
+                    for (let next = index + 1; next < lines.length; next++) {
+                        const text = lines[next];
+                        const indent = text.match(LEADING_SPACE)[0].length;
+                        if (text.trim() !== "" && indent <= def_indent) break;
+                        body.push({ line_number: next + 1, text });
+                    }
+                    return { line_number: index + 1, body };
+                }
+                return null;
+            }
+
+            const NO_FUNCTION = {
+                pass: false,
+                detail: "No yes_or_no() function found. Define it with def yes_or_no():.",
+            };
+
+            // The output rows already fail a program with no function at
+            // all, so this row is about where the question is asked: a
+            // yes_or_no() that only checks an answer read outside it passes
+            // the output with the loop at the top level, and has moved
+            // nothing into the function.
+            const INPUT_CALL = /\binput\s*\(/;
+            function defines_check(context) {
+                const found = yes_or_no_body(code_only(context.source));
+                if (found === null) return NO_FUNCTION;
+                const asks = found.body.find((line) => INPUT_CALL.test(line.text));
+                if (asks === undefined) {
+                    return failing_line(
+                        context, found.line_number, "defines yes_or_no() but never calls input() inside it",
+                        "The function itself asks the question.",
+                    );
+                }
+                return {
+                    pass: true,
+                    detail: `Line ${found.line_number}: "${quote_line(context, found.line_number)}".`,
+                };
+            }
+
+            // Returning a bool rather than the answer the user typed is the
+            // point of the activity, and the output rows charge only the last
+            // line of a case for it, so a function that returns "yes" keeps
+            // most of those points. This row zeroes it. `return answer` where
+            // answer came from input() is the likely form, so the body's
+            // assignments are followed in order: a name assigned from input()
+            // holds the typed string until something else is assigned to it,
+            // which is what lets `answer = answer == "yes"` then
+            // `return answer` pass.
+            const RETURN_STATEMENT = /^[ \t]*return\b(.*)$/;
+            const ASSIGNMENT = /^[ \t]*([A-Za-z_]\w*)\s*=(?!=)\s*(.*)$/;
+            const STRING_LITERAL_START = /^[A-Za-z]{0,2}["']/;
+            function returns_check(context) {
+                const found = yes_or_no_body(code_only(context.source));
+                if (found === null) return NO_FUNCTION;
+                const typed_names = new Set();
+                let first_return = null;
+                for (const { line_number, text } of found.body) {
+                    const assignment = text.match(ASSIGNMENT);
+                    if (assignment !== null) {
+                        if (INPUT_CALL.test(assignment[2])) typed_names.add(assignment[1]);
+                        else typed_names.delete(assignment[1]);
+                    }
+                    const statement = text.match(RETURN_STATEMENT);
+                    if (statement === null) continue;
+                    const value = statement[1].trim();
+                    if (value === "") {
+                        return failing_line(
+                            context, line_number, "returns nothing",
+                            "Return True for yes and False for no.",
+                        );
+                    }
+                    if (STRING_LITERAL_START.test(value)) {
+                        return failing_line(
+                            context, line_number, "returns a string",
+                            "Return True or False, without quotes.",
+                        );
+                    }
+                    if (typed_names.has(value)) {
+                        return failing_line(
+                            context, line_number, "returns what the user typed, which is a string",
+                            "Return True for yes and False for no.",
+                        );
+                    }
+                    first_return ??= line_number;
+                }
+                if (first_return === null) {
+                    return failing_line(
+                        context, found.line_number, "defines yes_or_no() without a return statement",
+                        "Return True for yes and False for no.",
+                    );
+                }
+                return {
+                    pass: true,
+                    detail: `Line ${first_return}: "${quote_line(context, first_return)}".`,
+                };
+            }
+
+            // The loop has to live inside the function, since re-asking is
+            // part of what the function does, and its condition has to
+            // compare with == and !=: the `in` operator has not been covered,
+            // so a line that uses it zeroes the row even when a while loop is
+            // also present. `in` is only a shortcut outside a for statement,
+            // where it is the loop's own syntax. `while` has to open a line,
+            // which keeps the word inside a string from counting.
+            const WHILE_STATEMENT = /^[ \t]*while\b/;
+            const FOR_LINE = /^[ \t]*for\b/;
+            const IN_OPERATOR = /\bin\b/;
+            function while_check(context) {
+                const source = code_only(context.source);
+                const lines = source.split("\n");
+                for (let index = 0; index < lines.length; index++) {
+                    if (FOR_LINE.test(lines[index]) || !IN_OPERATOR.test(lines[index])) continue;
+                    return failing_line(
+                        context, index + 1, 'uses "in", which has not been covered',
+                        "Compare the answer with == and != instead.",
+                    );
+                }
+                const found = yes_or_no_body(source);
+                if (found === null) return NO_FUNCTION;
+                const loop = found.body.find((line) => WHILE_STATEMENT.test(line.text));
+                if (loop === undefined) {
+                    return failing_line(
+                        context, found.line_number, "defines yes_or_no() without a while loop inside it",
+                        "The function itself re-asks until the answer is yes or no.",
+                    );
+                }
+                return {
+                    pass: true,
+                    detail: `Line ${loop.line_number}: "${quote_line(context, loop.line_number)}".`,
+                };
+            }
+
+            // The rows below score custom checks against the blanked source,
+            // so a row's name pasted back as a docstring line cannot trip its
+            // own check. The input row scans the raw source, and no name
+            // contains the prompt.
+            function build_criteria(results) {
+                return [
+                    {
+                        id: "input",
+                        name: "Input handling",
+                        points: 5,
+                        description:
+                            "Source calls input() with the exact prompt text from the handout.",
+                        type: "code",
+                        needles: [prompt_needles(PROMPT)],
+                        mode: "all",
+                    },
+                    {
+                        id: "output",
+                        name: "Correct output",
+                        points: 15,
+                        description:
+                            "15 points split evenly across all examples, prorated by the % of lines that match exactly.",
+                        type: "output-diff",
+                        cases: CASES,
+                    },
+                    {
+                        id: "defines",
+                        name: "Defines yes_or_no()",
+                        points: 5,
+                        description:
+                            "The program defines a function named yes_or_no that asks the question itself.",
+                        type: "custom",
+                        check: defines_check,
+                    },
+                    {
+                        id: "returns",
+                        name: "Returns True or False",
+                        points: 5,
+                        description:
+                            "yes_or_no() hands back True or False with return, rather than the answer the user typed.",
+                        type: "custom",
+                        check: returns_check,
+                    },
+                    {
+                        id: "while",
+                        name: "Use of a while loop",
+                        points: 5,
+                        description:
+                            "Re-asking for an invalid answer is done with a while loop inside yes_or_no().",
+                        type: "custom",
+                        check: while_check,
+                    },
+                    {
+                        id: "flake8",
+                        name: "flake8",
+                        points: 5,
+                        description:
+                            "−1 point per flake8 finding, down to a floor of 0.",
+                        type: "flake8",
+                        partial: true,
+                    },
+                ];
+            }
+
+            // The right column only: w5i1.md fills the left, and the page
+            // carries its own footer below both.
+            grader_app.init({
+                filename: "w5-i1.py",
+                editor: true,
+                title: "Submission",
+                subtitle: "Graded in this tab · nothing leaves your browser",
+                cases: CASES,
+                build_criteria,
+                max_auto_points: 40,
+                mount: "#grader",
+                handout: "w5i1.md",
+            });
+        </script>
+    </body>
+</html>
