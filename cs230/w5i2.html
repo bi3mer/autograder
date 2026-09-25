@@ -1,0 +1,398 @@
+<!doctype html>
+<html lang="en">
+    <head>
+        <meta charset="UTF-8" />
+        <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+        <title>Palindrome Autograder</title>
+        <link rel="stylesheet" href="../css/a1.css" />
+        <script src="https://cdn.jsdelivr.net/pyodide/v0.26.2/full/pyodide.js"></script>
+    </head>
+    <body>
+        <div class="split">
+            <section class="sheet">
+                <!-- The whole problem statement, fetched from w5i2.md and
+                     rendered by src/markdown.js. The file is the handout,
+                     readable on its own. -->
+                <div class="prose" id="handout"></div>
+            </section>
+
+            <section id="grader"></section>
+        </div>
+        <footer>bi3mer · Runs Python via Pyodide</footer>
+
+        <script type="module">
+            import { grader_app } from "../src/main.js";
+            import { assert } from "../src/assert.js";
+
+            // The prompt drives both the input() needle the rubric looks for
+            // and the transcript each case expects, so the wording is written
+            // once here. The handout quotes it again in w5i2.md, which is the
+            // one place the two can drift.
+            const PROMPT = "Word: ";
+
+            function reversed_text(word) {
+                return Array.from(word).reverse().join("");
+            }
+
+            // A case is the one word typed at the prompt. The handout's last
+            // three lines echo it, print reverse_string(word), then print
+            // is_palindrome(word), so the transcript is generated from the
+            // word. A reverse_string() that prints inside itself and returns
+            // nothing puts an extra line and then None in the transcript, and
+            // an is_palindrome() that compares the wrong way round or strips
+            // the word first ends on the wrong bool. The word is asserted
+            // non-empty and unpadded: an empty word or a leading space would
+            // make the echoed prompt line hard to read in the diff.
+            function palindrome_case(name, word) {
+                assert(word.length > 0, `palindrome_case "${name}": word must not be empty`);
+                assert(word.trim() === word, `palindrome_case "${name}": word must not be padded`);
+                const backwards = reversed_text(word);
+                return {
+                    name,
+                    stdin_lines: [word],
+                    expected_lines: [PROMPT + word, backwards, backwards === word ? "True" : "False"],
+                };
+            }
+
+            // Cases 1-4 are the handout's examples. Case 3's capital R
+            // catches .lower(), and case 4's space catches a
+            // reverse_string() that drops spaces or an is_palindrome() that
+            // strips them. Case 5 is
+            // an even-length palindrome and case 6 a single character, where
+            // an off-by-one loop reads past the end or skips the only
+            // character. Case 7 catches a check of only the first and last
+            // characters. Case 8 is digits, and case 9 is two real words
+            // that are each other's reverse. Case 10 is twenty-one
+            // characters, which catches a loop capped at a fixed count.
+            const CASES = [
+                palindrome_case("Example 1 — racecar is a palindrome", "racecar"),
+                palindrome_case("Example 2 — hello is not", "hello"),
+                palindrome_case("Example 3 — Racecar, with a capital R, is not", "Racecar"),
+                palindrome_case("Example 4 — taco cat, with its space, is not", "taco cat"),
+                palindrome_case("Example 5 — noon has an even length", "noon"),
+                palindrome_case("Example 6 — a single letter is a palindrome", "a"),
+                palindrome_case("Example 7 — abca matches only at the ends", "abca"),
+                palindrome_case("Example 8 — digits count as characters", "12321"),
+                palindrome_case("Example 9 — stressed reverses to desserts", "stressed"),
+                palindrome_case(
+                    "Example 10 — a man a plan a canal panama, without spaces",
+                    "amanaplanacanalpanama",
+                ),
+            ];
+
+            // Both quote styles, and with or without the trailing space, so a
+            // student is graded on the prompt's wording rather than on which
+            // quote character they reached for.
+            function prompt_needles(prompt) {
+                const trimmed = prompt.trimEnd();
+                return [
+                    `input("${prompt}")`,
+                    `input('${prompt}')`,
+                    `input("${trimmed}")`,
+                    `input('${trimmed}')`,
+                ];
+            }
+
+            // Strings and comments are blanked before scanning, as in w4i2.
+            // The summary students paste in as a docstring is prose, and its
+            // "is_palindrome() calls reverse_string()" line would otherwise
+            // read as the call. Docstrings and comments keep only their newlines, so
+            // the line numbers in the detail still match the editor; a
+            // one-line string keeps its quotes and any prefix, so
+            // `return "True"` still reads as returning a string.
+            const TRIPLE_QUOTED = /"""[\s\S]*?"""|'''[\s\S]*?'''/g;
+            const SINGLE_QUOTED = /"(?:[^"\\\n]|\\.)*"|'(?:[^'\\\n]|\\.)*'/g;
+            const COMMENT = /#[^\n]*/g;
+            function code_only(source) {
+                return source
+                    .replace(TRIPLE_QUOTED, (text) => text.replace(/[^\n]/g, ""))
+                    .replace(SINGLE_QUOTED, '""')
+                    .replace(COMMENT, "");
+            }
+
+            // Line `line_number` of the student's source as they wrote it.
+            // Matching runs on the blanked source, but a detail that quoted
+            // that would show `input("")` for `input("Word: ")`, and
+            // blanking keeps every newline, so the numbers line up.
+            function quote_line(context, line_number) {
+                return context.source.split("\n")[line_number - 1].trim();
+            }
+
+            function failing_line(context, line_number, reason, advice) {
+                return {
+                    pass: false,
+                    detail:
+                        `Line ${line_number} ${reason} ("${quote_line(context, line_number)}"). ` +
+                        advice,
+                };
+            }
+
+            function passing_line(context, line_number) {
+                return {
+                    pass: true,
+                    detail: `Line ${line_number}: "${quote_line(context, line_number)}".`,
+                };
+            }
+
+            // The def of `name` and its body, as `{ line_number, body }`, or
+            // null when the source defines no such function. The body is
+            // every line after the def that is blank or indented past it, up
+            // to the first line that is not, which is where Python ends the
+            // block. Any indent is accepted for the def, so a function nested
+            // by mistake is still found and its body still scanned.
+            const LEADING_SPACE = /^[ \t]*/;
+            function function_body(source, name) {
+                const def = new RegExp(`^([ \\t]*)def\\s+${name}\\s*\\(`);
+                const lines = source.split("\n");
+                for (let index = 0; index < lines.length; index++) {
+                    const match = lines[index].match(def);
+                    if (match === null) continue;
+                    const def_indent = match[1].length;
+                    const body = [];
+                    for (let next = index + 1; next < lines.length; next++) {
+                        const text = lines[next];
+                        const indent = text.match(LEADING_SPACE)[0].length;
+                        if (text.trim() !== "" && indent <= def_indent) break;
+                        body.push({ line_number: next + 1, text });
+                    }
+                    return { line_number: index + 1, body };
+                }
+                return null;
+            }
+
+            function no_function(signature) {
+                return {
+                    pass: false,
+                    detail: `No ${signature.split("(")[0]}() function found. Define it with def ${signature}:.`,
+                };
+            }
+
+            // Reversing one character at a time is the activity, so anything
+            // that reverses in one step scores zero even when a loop is also
+            // present: a slice, the reversed() builtin, or a list's
+            // .reverse(). None of the three has been covered, and neither
+            // has a for loop directly over the word, which hands over the
+            // characters without the indexing this practises. A for loop
+            // over range() and a while loop counting down are both accepted.
+            const SLICE = /\[[^\]\n]*:[^\]\n]*\]/;
+            const REVERSED_CALL = /\breversed\s*\(/;
+            const REVERSE_METHOD = /\.reverse\s*\(/;
+            const FOR_STATEMENT = /^[ \t]*for\s+(.+?)\s+in\s+(.+?)\s*:/;
+            const RANGE_CALL = /^range\s*\(/;
+            const WHILE_STATEMENT = /^[ \t]*while\b/;
+            function shortcut_on(line) {
+                if (SLICE.test(line)) return "takes a slice, which has not been covered";
+                if (REVERSED_CALL.test(line)) return "calls reversed(), which has not been covered";
+                if (REVERSE_METHOD.test(line)) return "calls .reverse(), which has not been covered";
+                const loop = line.match(FOR_STATEMENT);
+                if (loop !== null && !RANGE_CALL.test(loop[2])) {
+                    return `loops directly over "${loop[2]}", which has not been covered`;
+                }
+                return null;
+            }
+
+            function loop_check(context) {
+                const source = code_only(context.source);
+                const lines = source.split("\n");
+                for (let index = 0; index < lines.length; index++) {
+                    const shortcut = shortcut_on(lines[index]);
+                    if (shortcut === null) continue;
+                    return failing_line(
+                        context, index + 1, shortcut,
+                        "Build the reversed string one character at a time in a loop instead.",
+                    );
+                }
+                const found = function_body(source, "reverse_string");
+                if (found === null) return no_function("reverse_string(word)");
+                const loop = found.body.find(
+                    (line) => FOR_STATEMENT.test(line.text) || WHILE_STATEMENT.test(line.text),
+                );
+                if (loop === undefined) {
+                    return failing_line(
+                        context, found.line_number, "defines reverse_string() without a loop inside it",
+                        "Build the reversed string one character at a time in a loop.",
+                    );
+                }
+                return passing_line(context, loop.line_number);
+            }
+
+            // One function calling the other is the point of the activity,
+            // and the output cannot show it: an is_palindrome() that runs its
+            // own loop prints the same True or False. The lookbehind keeps a
+            // name like my_reverse_string() from counting.
+            const REVERSE_CALL = /(?<![\w.])reverse_string\s*\(/;
+            function calls_check(context) {
+                const found = function_body(code_only(context.source), "is_palindrome");
+                if (found === null) return no_function("is_palindrome(word)");
+                const call = found.body.find((line) => REVERSE_CALL.test(line.text));
+                if (call === undefined) {
+                    return failing_line(
+                        context, found.line_number,
+                        "defines is_palindrome() without calling reverse_string() inside it",
+                        "Compare the word with reverse_string(word) instead of reversing it again.",
+                    );
+                }
+                return passing_line(context, call.line_number);
+            }
+
+            // A function that prints its answer and returns nothing puts
+            // None in the transcript, which the output rows charge for
+            // without saying where it came from; this row names the line.
+            // input() inside either function is the other slip, since the
+            // word arrives as the parameter. is_palindrome() returning the
+            // string "True" prints the same as the bool, so only this row
+            // can catch it.
+            const PRINT_CALL = /\bprint\s*\(/;
+            const INPUT_CALL = /\binput\s*\(/;
+            const RETURN_STATEMENT = /^[ \t]*return\b(.*)$/;
+            const STRING_LITERAL_START = /^[A-Za-z]{0,2}["']/;
+            const RETURNING_FUNCTIONS = [
+                {
+                    name: "reverse_string",
+                    signature: "reverse_string(word)",
+                    advice: "Return the reversed string.",
+                    returns_bool: false,
+                },
+                {
+                    name: "is_palindrome",
+                    signature: "is_palindrome(word)",
+                    advice: "Return True or False.",
+                    returns_bool: true,
+                },
+            ];
+
+            // `{ pass: false, detail }` for the first slip in one function's
+            // body, or `{ pass: true, line_number }` for its first return.
+            function first_return(context, found, spec) {
+                let line_found = null;
+                for (const { line_number, text } of found.body) {
+                    if (PRINT_CALL.test(text)) {
+                        return failing_line(
+                            context, line_number, `calls print() inside ${spec.name}()`,
+                            "Return the value instead; the last lines of the program print it.",
+                        );
+                    }
+                    if (INPUT_CALL.test(text)) {
+                        return failing_line(
+                            context, line_number, `calls input() inside ${spec.name}()`,
+                            "The word arrives as the parameter; the last lines of the program read it.",
+                        );
+                    }
+                    const statement = text.match(RETURN_STATEMENT);
+                    if (statement === null) continue;
+                    const value = statement[1].trim();
+                    if (value === "") {
+                        return failing_line(context, line_number, "returns nothing", spec.advice);
+                    }
+                    if (spec.returns_bool && STRING_LITERAL_START.test(value)) {
+                        return failing_line(
+                            context, line_number, "returns a string",
+                            "Return True or False, without quotes.",
+                        );
+                    }
+                    line_found ??= line_number;
+                }
+                if (line_found === null) {
+                    return failing_line(
+                        context, found.line_number,
+                        `defines ${spec.name}() without a return statement`, spec.advice,
+                    );
+                }
+                return { pass: true, line_number: line_found };
+            }
+
+            function returns_check(context) {
+                const source = code_only(context.source);
+                const shown = [];
+                for (const spec of RETURNING_FUNCTIONS) {
+                    const found = function_body(source, spec.name);
+                    if (found === null) return no_function(spec.signature);
+                    const outcome = first_return(context, found, spec);
+                    if (!outcome.pass) return outcome;
+                    shown.push(
+                        `Line ${outcome.line_number}: "${quote_line(context, outcome.line_number)}"`,
+                    );
+                }
+                assert(shown.length === RETURNING_FUNCTIONS.length, "returns_check: one return per function");
+                return { pass: true, detail: `${shown.join("; ")}.` };
+            }
+
+            // The custom rows scan the blanked source, so a row's name pasted
+            // back as a docstring line cannot trip its own check. The input
+            // row scans the raw source, and no name contains the prompt.
+            function build_criteria(results) {
+                return [
+                    {
+                        id: "input",
+                        name: "Input handling",
+                        points: 5,
+                        description:
+                            "Source calls input() with the exact prompt text from the handout.",
+                        type: "code",
+                        needles: [prompt_needles(PROMPT)],
+                        mode: "all",
+                    },
+                    {
+                        id: "output",
+                        name: "Correct output",
+                        points: 15,
+                        description:
+                            "15 points split evenly across all examples, prorated by the % of lines that match exactly.",
+                        type: "output-diff",
+                        cases: CASES,
+                    },
+                    {
+                        id: "loop",
+                        name: "Loop in reverse_string()",
+                        points: 5,
+                        description:
+                            "reverse_string() builds the reversed string one character at a time in a loop.",
+                        type: "custom",
+                        check: loop_check,
+                    },
+                    {
+                        id: "calls",
+                        name: "is_palindrome() calls reverse_string()",
+                        points: 5,
+                        description:
+                            "is_palindrome() gets the reversed word by calling reverse_string() rather than reversing it again.",
+                        type: "custom",
+                        check: calls_check,
+                    },
+                    {
+                        id: "returns",
+                        name: "Returns instead of prints",
+                        points: 5,
+                        description:
+                            "Both functions hand back their answer with return and print nothing; is_palindrome() returns True or False.",
+                        type: "custom",
+                        check: returns_check,
+                    },
+                    {
+                        id: "flake8",
+                        name: "flake8",
+                        points: 5,
+                        description:
+                            "−1 point per flake8 finding, down to a floor of 0.",
+                        type: "flake8",
+                        partial: true,
+                    },
+                ];
+            }
+
+            // The right column only: w5i2.md fills the left, and the page
+            // carries its own footer below both.
+            grader_app.init({
+                filename: "w5-i2.py",
+                editor: true,
+                title: "Submission",
+                subtitle: "Graded in this tab · nothing leaves your browser",
+                cases: CASES,
+                build_criteria,
+                max_auto_points: 40,
+                mount: "#grader",
+                handout: "w5i2.md",
+            });
+        </script>
+    </body>
+</html>
