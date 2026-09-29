@@ -7,9 +7,12 @@ with flake8, and prints a rubric plus a Copy button that hands back the whole
 submission, summary docstring and all. Nothing is uploaded: the Python
 runtime, the student's code, and the grading all live in the browser tab.
 
-There is no build step and no dependencies. The browser loads `src/` as ES
-modules, GitHub Pages serves the repository tree as it stands, and the tests
-are plain Node, so what runs in production is the source you are reading.
+There is no build step, and the site has no dependencies. The browser loads
+`src/` as ES modules, GitHub Pages serves the repository tree as it stands,
+and the tests are plain Node, so what runs in production is the source you are
+reading. The same engine also grades from a terminal, or from any Node script,
+for batches of submissions; see
+[Grading From the Terminal](#grading-from-the-terminal).
 
 ## Using the Engine in an HTML Page
 
@@ -86,16 +89,17 @@ grader_app.init({
 });
 ```
 
-The `w1p1`, `w1p2`, and `w2p2` pages are wired this way: the handout fills the
-left column and the grader the right, with `.split` in `css/a1.css` carrying the
-layout. `a1.html` predates the handout support and still ships `cs230/a1.md`
-separately, so it renders as a single centred sheet.
+Every assignment but a1 is wired this way, through the one page
+`cs230/assignment.html`: the handout fills the left column and the grader the
+right, with `.split` in `css/a1.css` carrying the layout. `a1.html` predates the
+handout support and still ships `cs230/a1.md` separately, so it renders as a
+single centred sheet.
 
 `handout: "w1p1.md"` is shorthand for the same thing mounted at `#handout`. The
 path resolves against the page rather than against `src/`, so the markdown sits
 beside the HTML that names it. The handout's mount is separate from the
-grader's, which is what lets `cs230/w1p1.html` carry the statement in one column
-and the drop zone in the other. A page with no grader on it can import
+grader's, which is what lets `cs230/assignment.html` carry the statement in one
+column and the drop zone in the other. A page with no grader on it can import
 `load_handout` and call it directly.
 
 ### The Rubric Generates Itself
@@ -199,8 +203,9 @@ grader_app.init({
 
 `editor: true` is shorthand for the defaults, and the full form takes one
 option, `download`. There is no starter file: the editor opens empty, because
-writing the program from nothing is the assignment. `cs230/w2p2.html` is the
-page that uses it; everything else passes `editor: false` and is untouched.
+writing the program from nothing is the assignment. An assignment turns it on
+with `editor: true` in its module's `page` export; w1p1 and w1p2 predate it and
+pass `false`, which leaves the page untouched.
 
 **Run is not Grade.** Grade does what it always did: every example, the whole
 rubric, a submission to copy. Run executes the buffer once against one example
@@ -218,7 +223,9 @@ uses. A preview that disagreed with the score would be worse than no preview.
 The buffer is the submission: typing sets it, a dropped `.py` file lands in it,
 and Download writes it back out under `config.filename`, because students still
 upload the real file. Drafts save to `localStorage` behind a debounce, keyed by
-page path, so a refresh does not cost an afternoon.
+page path, so a refresh does not cost an afternoon. The shared page passes
+`draft_path`, the path each assignment's own page had before the pages were
+merged, so a draft saved then still comes back.
 
 A drop over a buffer that already has code asks first. The drop zone and the
 editor write to the same submission and the file wins, and that overwrite is the
@@ -292,12 +299,23 @@ reload. That was true of grading too, not just the editor.
 
 ## Adding an Assignment
 
-Copy `cs230/w1p1.html` (or `cs230/w2p2.html` for one with an editor), then
-replace two things: `CASES` (the stdin and expected
-output for each example in the handout) and `build_criteria` (the rubric). The
-problem statement goes in a `.md` file beside it, named by `handout`.
-Everything else is shared, and the page is about a dozen lines around that
-data. Criterion types are `code`, `output`, `code-regex`, `output-diff`,
+An assignment is two files in `cs230/` named by its id: `<id>.js` for the
+rules and `<id>.md` for the handout. Copy `cs230/w2p2.js` and its `.md`, then
+replace `CASES` (the stdin and expected output for each example in the
+handout) and `build_criteria` (the rubric). The module ends with two exports:
+
+```js
+export const assignment = { filename: "w2-2.py", cases: CASES, build_criteria, max_auto_points: 40 };
+export const page = { title: "Login Autograder", editor: true };
+```
+
+`assignment` is what grading reads, the same object the terminal grader
+imports. `page` is what `cs230/assignment.html?id=<id>` shows around it. Link
+that URL from `cs230/index.html`; `test/test_assignments.js` fails if a module
+is missing its handout or its link. Old links of the form `cs230/<id>.html`
+still work: `404.html` sends them to the shared page.
+
+Criterion types are `code`, `output`, `code-regex`, `output-diff`,
 `flake8`, and `custom`; the comment above `round_points` in `src/rubric.js`
 lists every field a criterion takes.
 
@@ -311,7 +329,7 @@ A program that picks a random number prints a different transcript every run,
 so a case can carry `randint_values`: the numbers `random.randint` returns
 for that run, call by call, whatever its arguments. The runner puts the real
 function back afterwards, and a program that calls it more often than the
-case supplies stops with a sentence saying so. `cs230/w5p1.html` uses it to
+case supplies stops with a sentence saying so. `cs230/w5p1.js` uses it to
 fix each example's secret.
 
 A construct an assignment forbids outright goes in `gates` rather than in a
@@ -320,13 +338,74 @@ Each gate is `{ name, description, check }`, and `check(source)` returns
 `{ pass, detail }`. A failing gate zeroes the submission the way the syntax
 probe does: its row reads ZERO, the banner names it, the summary says
 `Score: 0 (failed "<name>" — see below)`, and the cases never run.
-`cs230/w4i2.html` gates on `.find()`, since writing `find()` is that activity.
+`cs230/w4i2.js` gates on `.find()`, since writing `find()` is that activity.
+
+## Grading From the Terminal
+
+The pages grade in the browser, and GitHub Pages cannot run anything else, so
+grading without a page happens on your own machine, in Node, with the same
+engine and the same `cs230/<id>.js` rules. A score from the terminal is the
+score the page gives: both call `grade_source` in `src/grader.js`.
+
+```
+npm install                                        # once: fetches Pyodide 0.26.2
+npm run grade -- w5p1 w5-1.py                      # the summary
+npm run grade -- w5p1 submissions/*.py             # one summary per file
+npm run grade -- --submission w5p1 w5-1.py         # the paste Copy builds
+npm run grade -- --json w5p1 w5-1.py               # every row, as JSON
+```
+
+A batch grades at about a second and a quarter per file (twenty files in 25
+seconds). Results go to stdout and progress to stderr, so the output pipes.
+Each file's Python fetches flake8, so grading needs the network; without it
+from the start, style falls back to the built-in checks, as a page does
+offline, and a file whose fetch fails partway through a batch is reported
+rather than scored by different checks from the rest.
+
+A file saved on Windows grades the same as any other: `grade_source` drops a
+byte order mark and turns `\r\n` into `\n` before anything reads it, on the
+page and in the terminal alike.
+
+A Node script, such as one that pulls submissions from BrightSpace's API and
+posts the scores back, uses the same grader directly:
+
+```js
+import { open_grader } from "./api/grader.js";
+
+const grader = await open_grader();
+const result = await grader.grade("w5p1", source);
+// result: { total_points, max_auto_points, zero_reason, rows, summary, submission }
+grader.close();
+```
+
+Each row's `detail` is HTML, which BrightSpace feedback accepts as is. Keep
+API credentials in `.env`, which `.gitignore` already keeps out of the
+repository.
+
+**Student code runs in a sandbox.** In a browser the tab contains a
+submission, but in Node, Pyodide's `import js` reaches `process`, and through
+it the shell and your files. So student code never runs in the process that
+calls `grade`: `api/worker.js` runs it, forked under Node's permission model
+with read access to this repository, write access to Pyodide's package cache
+(`api/.pyodide-cache/`), and the network, and nothing else. It cannot start a
+program, write a file, or read one outside the repository. `npm run test:api`
+tries each of those from a submission and checks that it is refused.
+
+**Every submission gets a fresh Python.** A page's interpreter only ever runs
+one student's code, but a batch's would run everyone's, and a submission can
+change the interpreter for whatever runs after it: replace `builtins.print`
+and the next student's output vanishes. So each file is graded by a worker of
+its own, killed afterwards, with the next one already starting. A submission
+that hangs where the runner's own timeout cannot reach, inside one long call
+into C, is killed at a deadline scaled to the assignment's case count, and
+costs nothing but its own grade.
 
 ## Development
 
 ```
-npm run serve       # http://localhost:8000/cs230/a1.html
-npm test            # 188 tests, straight from a clone: nothing to install
+npm run serve       # http://localhost:8000/cs230/
+npm test            # straight from a clone: nothing to install
+npm run test:api    # the terminal grader, with real Pyodide: needs npm install
 ```
 
 Serve over HTTP rather than opening a page directly: ES modules, Pyodide's
@@ -335,17 +414,20 @@ WebAssembly runtime, and an assignment's markdown handout are all fetched, and a
 is Python's, because Pyodide already
 assumes Python is around.
 
-`package.json` carries the three scripts and `"type": "module"`, which is
+`package.json` carries the scripts and `"type": "module"`, which is
 what makes Node read `src/*.js` as ES modules. A browser decides that from
 the `type="module"` attribute on the script tag instead, so it never reads
-the manifest at all. There are no dependencies and no lockfile, so there is
-no install step: `npm test` runs on a fresh clone.
+the manifest at all. Its one dependency, `pyodide`, is a dev dependency that
+only the terminal grader in `api/` loads, so `npm test` still runs on a fresh
+clone with no install step, and CI installs nothing.
 
 The tests run on Node's own test runner, one file per module: `test_checks.js`
 covers `src/checks.js`, `test_rubric.js` covers `src/rubric.js`, and so on.
 `test_pyrunner.js` drives the runner against a fake interpreter that records
 the Python it is handed, which covers the encoding and the state guards
-without WebAssembly. `test_markdown.js` covers the parser in full, since it is
+without WebAssembly, and `test_grader.js` runs `grade_source` against the same
+kind of fake. `test_assignments.js` loads every `cs230/<id>.js` and checks it
+against its handout, the index, and `404.html`. `test_markdown.js` covers the parser in full, since it is
 a pure function from string to string.
 
 `test_editor.js` covers the indent arithmetic, which is where a silent wrong
@@ -360,7 +442,7 @@ They do not cover the DOM: a test double for the browser is a second
 implementation to trust, and jsdom is a large dependency to carry for it. The
 generated page is checked by loading it. Serve the site and drop a `.py` file
 on `cs230/a1.html`; a missing element fails an assertion at startup, in front
-of you, rather than silently. For the editor, open `cs230/w2p2.html` and run a
+of you, rather than silently. For the editor, open `cs230/assignment.html?id=w2p2` and run a
 program with a syntax error, one that divides by zero, one that reads more
 input than the example supplies, and one that loops forever.
 

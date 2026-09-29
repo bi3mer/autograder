@@ -18,10 +18,10 @@ import { resolve_mount } from "./page.js";
 
 /**
  * Handout paths are written relative to the assignment page, so `"w1p1.md"`
- * beside `cs230/w1p1.html` resolves against the page rather than against this
- * module. That is the opposite of how `page.js` finds its stylesheet, and it
- * is deliberate: the stylesheet ships with the engine, the handout ships with
- * the assignment.
+ * beside `cs230/assignment.html` resolves against the page rather than
+ * against this module. That is the opposite of how `page.js` finds its
+ * stylesheet, and it is deliberate: the stylesheet ships with the engine, the
+ * handout ships with the assignment.
  */
 export function resolve_handout_url(href, base) {
   assert_string(href, "resolve_handout_url: href", HANDOUT_HREF_CHARS_MAX);

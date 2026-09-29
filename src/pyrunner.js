@@ -205,7 +205,7 @@ function build_run_python(code, stdin_lines, filename, timeout_ms, randint_value
   assert(Array.isArray(randint_values), "build_run_python: randint_values must be an array");
   assert_range(timeout_ms, "build_run_python: timeout_ms", 1, RUN_TIMEOUT_MS_MAX);
   return `
-import sys, io, json, time, random, builtins, traceback, linecache
+import os, sys, io, json, time, random, builtins, traceback, linecache
 
 _name = ${JSON.stringify(filename)}
 _src = json.loads(${embed(code)})
@@ -267,6 +267,17 @@ def _fake_randint(a, b):
 
 if _randint_values:
     random.randint = _fake_randint
+
+# os._exit() ends the interpreter, not the program: a tab's Pyodide has to be
+# reloaded after it, and the terminal grader's worker dies without a score.
+# It ends the program the way sys.exit() does instead, and the real one goes
+# back in the \`finally\`, since every run shares the \`os\` module.
+_os_exit_real = os._exit
+
+def _fake_os_exit(status):
+    raise SystemExit(status)
+
+os._exit = _fake_os_exit
 
 # Reading the clock on every line costs more than the check saves, so the
 # counter samples it instead.
@@ -338,6 +349,7 @@ except BaseException as _e:
 finally:
     sys.stdout = _old
     random.randint = _randint_real
+    os._exit = _os_exit_real
 json.dumps({"out": _out.getvalue(), "err": _err, "prompts": _prompts,
             "kind": _kind, "line": _line, "col": _col})
 `;

@@ -1,0 +1,76 @@
+<!doctype html>
+<html lang="en">
+    <head>
+        <meta charset="UTF-8" />
+        <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+        <title>CS230 Autograder</title>
+        <link rel="stylesheet" href="../css/a1.css" />
+        <script src="https://cdn.jsdelivr.net/pyodide/v0.26.2/full/pyodide.js"></script>
+    </head>
+    <body>
+        <div class="split">
+            <section class="sheet">
+                <!-- The whole problem statement, fetched from <id>.md and
+                     rendered by src/markdown.js. The file is the handout,
+                     readable on its own. -->
+                <div class="prose" id="handout"></div>
+            </section>
+
+            <section id="grader"></section>
+        </div>
+        <footer>bi3mer · Runs Python via Pyodide</footer>
+
+        <script type="module">
+            import { grader_app } from "../src/main.js";
+            import { ASSIGNMENT_ID_PATTERN } from "../src/constants.js";
+
+            // Every assignment with a handout is this one page: ?id=w5p1
+            // takes its rules from w5p1.js and its handout from w5p1.md.
+            // a1 predates the handout column and keeps a1.html.
+
+            function show_missing(message) {
+                const note = document.createElement("p");
+                note.textContent = `${message} `;
+                const back = document.createElement("a");
+                back.href = "./";
+                back.textContent = "Pick one from the list.";
+                note.append(back);
+                document.getElementById("grader").replaceChildren(note);
+            }
+
+            async function load_assignment(id) {
+                if (!ASSIGNMENT_ID_PATTERN.test(id)) return null;
+                try {
+                    return await import(`./${id}.js`);
+                } catch (error) {
+                    // A 404 and a module that fails to evaluate land here
+                    // alike; the console keeps the difference.
+                    console.error(error);
+                    return null;
+                }
+            }
+
+            const id = new URLSearchParams(location.search).get("id") ?? "";
+            const module = await load_assignment(id);
+            if (module === null) {
+                show_missing(id === "" ? "No assignment chosen." : `No assignment named "${id}".`);
+            } else if (module.page === undefined) {
+                // A module without a page export has a page of its own.
+                location.replace(`${id}.html`);
+            } else {
+                document.title = module.page.title;
+                grader_app.init({
+                    ...module.assignment,
+                    editor: module.page.editor,
+                    title: "Submission",
+                    subtitle: "Graded in this tab · nothing leaves your browser",
+                    mount: "#grader",
+                    handout: `${id}.md`,
+                    // Drafts were saved under each assignment's own page
+                    // before the pages were merged, so they stay keyed by it.
+                    draft_path: location.pathname.replace(/[^/]*$/, `${id}.html`),
+                });
+            }
+        </script>
+    </body>
+</html>

@@ -148,5 +148,8 @@ vite.config.ts.timestamp-*
 # Pages serves the repository tree as it stands. (`dist` still appears above
 # under the Nuxt.js section, which is fine — nothing writes to it.)
 
+# Pyodide packages fetched for grading from the terminal (api/).
+api/.pyodide-cache/
+
 # macOS
 .DS_Store

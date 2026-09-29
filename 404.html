@@ -1,0 +1,23 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>Page Not Found</title>
+    <script>
+      // The assignment pages were merged into cs230/assignment.html?id=…,
+      // and links to the old ones, like cs230/w5p1.html, are still out
+      // there on BrightSpace and in bookmarks. GitHub Pages serves this file
+      // for any path it has no file for, so it sends those on. The id
+      // pattern is src/constants.js's ASSIGNMENT_ID_PATTERN, copied because
+      // this page can be served from any path and cannot import by one.
+      const old = location.pathname.match(/^(.*\/cs230\/)([a-z][a-z0-9]{1,15})\.html$/);
+      if (old !== null) {
+        location.replace(`${old[1]}assignment.html?id=${old[2]}${location.hash}`);
+      }
+    </script>
+  </head>
+  <body>
+    <p>Page not found.</p>
+  </body>
+</html>

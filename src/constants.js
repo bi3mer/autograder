@@ -156,3 +156,11 @@ export const HIGHLIGHT_BYTES_MAX = 128 * 1024;
  * the scanner never loops without consuming.
  */
 export const HIGHLIGHT_TOKEN_COUNT_MAX = HIGHLIGHT_BYTES_MAX;
+
+/**
+ * An assignment id, like `w5p1`: the name of its module and its handout in
+ * `cs230/`. `cs230/assignment.html` and `api/worker.js` both check an id
+ * against this before handing it to `import()`, so a URL or a command line
+ * can only name a module in that folder.
+ */
+export const ASSIGNMENT_ID_PATTERN = /^[a-z][a-z0-9]{1,15}$/;

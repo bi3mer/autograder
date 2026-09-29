@@ -1,11 +1,13 @@
 /**
- * What the Copy button hands a student.
+ * What the Copy button hands a student, and the grading behind it.
  *
  * `grader.js` is page glue and most of it needs a DOM, but `submission_text`
  * is a pure function from a summary and a source file to one paste, and it is
  * the piece a wrong answer costs points for: a docstring that does not open
  * on line 1, or does not close before the code, is the exact mistake the
- * button exists to prevent.
+ * button exists to prevent. `grade_source` is the grading the page and the
+ * terminal share, run here against a fake interpreter as in
+ * `test_pyrunner.js`: which rows it builds, and when a gate zeroes the score.
  */
 
 import assert from "node:assert/strict";
@@ -13,7 +15,8 @@ import { test } from "node:test";
 
 import { AssertionError } from "../src/assert.js";
 import { SOURCE_BYTES_MAX } from "../src/constants.js";
-import { submission_text } from "../src/grader.js";
+import { grade_source, submission_text } from "../src/grader.js";
+import * as py_runner from "../src/pyrunner.js";
 
 const SUMMARY = [
   "w4-i1.py — Autograder Summary",
@@ -97,4 +100,108 @@ test("a source at the grader's ceiling still assembles, docstring and all", () =
   assert.ok(paste.length > SOURCE_BYTES_MAX, "the docstring pushes it over the source bound");
   assert.ok(paste.startsWith('"""\n'));
   assert.ok(paste.endsWith("#\n"));
+});
+
+/**
+ * What the next run of the fake interpreter reports. Clean by default, so a
+ * test sets only the failure it is about.
+ */
+let next_run = {};
+
+/** The one interpreter `grader.js` shares with this file, answered from `next_run`. */
+await py_runner.init({
+  load_pyodide: async () => ({
+    async loadPackage() {},
+    pyimport: () => ({ install: async () => {} }),
+    async runPythonAsync(source) {
+      if (!source.includes('json.dumps({"out"')) return undefined;
+      return JSON.stringify({ out: "", err: "", prompts: [], kind: "", line: null, col: null, ...next_run });
+    },
+  }),
+});
+
+const ASSIGNMENT = {
+  filename: "t.py",
+  cases: [{ name: "one", stdin_lines: [], expected_lines: [] }],
+  build_criteria: () => [{
+    id: "print",
+    name: "Uses print",
+    description: "Calls print().",
+    points: 10,
+    type: "code",
+    needles: [["print("]],
+  }],
+  max_auto_points: 10,
+};
+
+test("grade_source scores a clean run row by row, and builds the page's summary", async () => {
+  next_run = {};
+  const result = await grade_source(ASSIGNMENT, "print(1)\n");
+  assert.equal(result.zero_reason, null);
+  assert.equal(result.total_points, 10);
+  assert.deepEqual(result.rows.map((row) => [row.name, row.score]), [
+    ["Compiles without syntax errors", "OK"],
+    ["Uses print", "10 / 10"],
+  ]);
+  assert.equal(
+    result.summary,
+    "t.py — Autograder Summary\nScore: 10 / 10\n\n- Compiles without syntax errors: OK\n- Uses print: 10 / 10",
+  );
+  assert.equal(result.submission, submission_text(result.summary, "print(1)\n"));
+});
+
+test("grade_source zeroes a syntax error and scores nothing else", async () => {
+  next_run = { err: "SYNTAX: invalid syntax (t.py, line 1)", kind: "syntax", line: 1, col: 0 };
+  const result = await grade_source(ASSIGNMENT, "print(\n");
+  assert.equal(result.zero_reason, "syntax error");
+  assert.equal(result.total_points, 0);
+  assert.deepEqual(result.rows.map((row) => row.score), ["ZERO"]);
+  assert.ok(result.summary.includes("Score: 0 (syntax error — see below)"));
+});
+
+test("grade_source zeroes a failed gate, and a throwing gate fails rather than crashing", async () => {
+  next_run = {};
+  const gated = {
+    ...ASSIGNMENT,
+    gates: [
+      { name: "No imports", check: (source) => ({ pass: !source.includes("import") }) },
+      { name: "Throws", check: () => { throw new Error("gate bug"); } },
+    ],
+  };
+  const result = await grade_source(gated, "import os\nprint(1)\n");
+  assert.equal(result.zero_reason, 'failed "No imports"', "the first failed gate names the zero");
+  assert.equal(result.total_points, 0);
+  assert.deepEqual(result.rows.map((row) => row.score), ["OK", "ZERO", "ZERO"]);
+  assert.ok(result.rows[2].detail.includes("gate bug"));
+});
+
+test("grade_source lists manual rows after the scored ones, as pending", async () => {
+  next_run = {};
+  const manual = {
+    ...ASSIGNMENT,
+    manual_rows: [{ name: "Comments", description: "Reviewed by hand.", score: "manual / 5", detail: "" }],
+  };
+  const result = await grade_source(manual, "print(1)\n");
+  assert.deepEqual(result.rows.at(-1), {
+    mark: "—", state: "pending", name: "Comments", description: "Reviewed by hand.", score: "manual / 5", detail: "",
+  });
+  assert.equal(result.total_points, 10, "a manual row adds nothing to the total");
+});
+
+test("grade_source grades Windows line endings and a byte order mark as plain text", async () => {
+  next_run = {};
+  const seen = [];
+  const watched = {
+    ...ASSIGNMENT,
+    gates: [{ name: "Sees the source", check: (source) => { seen.push(source); return { pass: true }; } }],
+  };
+  const result = await grade_source(watched, "﻿x = 1\r\nprint(x)\r\ny = 2\rprint(y)\r\n");
+  assert.deepEqual(seen, ["x = 1\nprint(x)\ny = 2\nprint(y)\n"], "every check reads LF, no BOM");
+  assert.ok(!result.submission.includes("\r"), "the paste carries the source as graded");
+  assert.ok(!result.submission.includes("﻿"));
+});
+
+test("grade_source rejects a malformed assignment or source at the boundary", async () => {
+  await assert.rejects(grade_source({ ...ASSIGNMENT, cases: [] }, "print(1)"), AssertionError);
+  await assert.rejects(grade_source(ASSIGNMENT, 42), AssertionError);
 });

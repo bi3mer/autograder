@@ -1,0 +1,475 @@
+// w5p1's grading rules: its cases, its rubric, and the file and points
+// they grade. assignment.html?id=w5p1 grades with them in the browser, and
+// api/worker.js imports them to grade from the terminal, so a submission
+// scores the same either way.
+
+import { assert } from "../src/assert.js";
+
+// The prompt drives both the call needles the rubric looks for
+// and the transcript each case expects, and the three messages
+// drive the transcript, so the wording is written once here. The
+// handout quotes all four again in w5p1.md, which is the one
+// place they can drift.
+const PROMPT_GUESS = "Guess: ";
+const TOO_HIGH = "Too high.";
+const TOO_LOW = "Too low.";
+const CORRECT = "Correct!";
+
+// The handout's rule, written once so the cases below can be
+// checked against it at startup. The regex is Python's
+// str.isdigit() for the ASCII the cases use: it rejects the empty
+// string, a sign, a decimal point, and a space, which is what
+// makes " 5" and "+5" invalid even though int() would accept
+// them. "007" passes, since it is digits and above 0.
+function valid_number(text) {
+    return /^[0-9]+$/.test(text) && Number(text) > 0;
+}
+
+// A case is the secret random.randint() hands the starter code,
+// then the answers typed at the guess prompt, in order. The
+// runner makes randint return the case's secret, which is what
+// lets a random game have a fixed transcript. Every answer is
+// echoed after its prompt, and each valid guess is followed by
+// the hint play_game() prints for it, so the transcript is
+// generated from the answers. Each answer is asserted so a case
+// the handout would not play out that way fails at startup
+// rather than grading every correct submission down. The output
+// criterion sets no anchor_prefix on purpose: the number of
+// prompt lines is the evidence that the validation loop re-asked,
+// so the echoes have to be graded too.
+function game_case(name, secret, guesses) {
+    assert(
+        Number.isInteger(secret) && secret >= 1 && secret <= 100,
+        `game_case "${name}": the starter's secret is 1 to 100`,
+    );
+    assert(
+        valid_number(guesses[guesses.length - 1]),
+        `game_case "${name}": last guess must be valid`,
+    );
+
+    const lines = [];
+    for (let index = 0; index < guesses.length; index++) {
+        const typed = guesses[index];
+        lines.push(PROMPT_GUESS + typed);
+        if (!valid_number(typed)) continue;
+        const guess = Number(typed);
+        assert(
+            (guess === secret) === (index === guesses.length - 1),
+            `game_case "${name}": only the last guess may equal the secret`,
+        );
+        if (guess > secret) lines.push(TOO_HIGH);
+        else if (guess < secret) lines.push(TOO_LOW);
+        else lines.push(CORRECT);
+    }
+    return {
+        name,
+        stdin_lines: guesses,
+        expected_lines: lines,
+        randint_values: [secret],
+    };
+}
+
+// One rejected guess per way of being wrong, for case 10 below.
+// "000" is digits but not above 0, and "1e2" and "0x37" are
+// numbers to Python's literal syntax but not to isdigit().
+const REJECTED_MIX = [
+    "", "0", "00", "000", "-1", "-55", "1.5", "55.0", " 55", "55 ",
+    "+55", "fifty", "5 5", "5,5", "1e2", "0x37", "abc", "?", "55!", "--5",
+];
+
+// Cases 1-3 are the handout's examples. Case 4 guesses on both
+// sides of the secret, where comparing strings instead of ints
+// would sort "100" below "37" and "5" above it. Case 5 finds 7 by
+// typing "007", which only int() turns into 7. Case 6 is a space and a plus sign, which int()
+// accepts and isdigit() does not, so it catches validation by
+// int() alone. Case 7 is an empty answer and "00", which a check
+// against the string "0" lets through. Cases 8 and 9 put the
+// secret on both ends of the range. Case 10 rejects twenty
+// guesses in a row, which catches an if instead of a while. Case
+// 11 takes sixty guesses, which catches a game loop capped at a
+// fixed number of tries.
+const CASES = [
+    game_case("Example 1 — 37, found on the third guess", 37, ["50", "20", "37"]),
+    game_case(
+        "Example 2 — invalid answers are re-asked, then 42",
+        42, ["0", "-5", "abc", "3.5", "60", "42"],
+    ),
+    game_case("Example 3 — 8, found on the first guess", 8, ["8"]),
+    game_case("Example 4 — 100 and 5 around 37", 37, ["100", "5", "37"]),
+    game_case("Example 5 — 007 finds 7", 7, ["10", "007"]),
+    game_case(
+        "Example 6 — a space and a plus sign are re-asked, then 5",
+        5, [" 5", "+5", "5 ", "5"],
+    ),
+    game_case(
+        "Example 7 — empty, 00, and 0 are re-asked, then 63",
+        63, ["", "00", "0", "", "64", "62", "63"],
+    ),
+    game_case(
+        "Example 8 — halving down to 1",
+        1, ["50", "25", "12", "6", "3", "2", "1"],
+    ),
+    game_case(
+        "Example 9 — halving up to 100",
+        100, ["50", "75", "88", "94", "97", "99", "100"],
+    ),
+    game_case(
+        "Example 10 — twenty guesses are re-asked, then 55",
+        55, [...REJECTED_MIX, "55"],
+    ),
+    game_case(
+        "Example 11 — counting up from 1 to 60",
+        60, Array.from({ length: 60 }, (_, index) => String(index + 1)),
+    ),
+];
+
+// Both quote styles, and with or without the trailing space, so a
+// student is graded on the prompt's wording rather than on which
+// quote character they reached for. The prompt reaches input()
+// through the function's parameter, so the needle is the call
+// that passes it in.
+function call_needles(function_name, prompt) {
+    const trimmed = prompt.trimEnd();
+    return [
+        `${function_name}("${prompt}")`,
+        `${function_name}('${prompt}')`,
+        `${function_name}("${trimmed}")`,
+        `${function_name}('${trimmed}')`,
+    ];
+}
+
+// Strings and comments are blanked before scanning, as in w4i2.
+// The summary students paste in as a docstring is prose, and its
+// "Validation in get_positive_number()" line would otherwise read
+// as the `in` operator. Docstrings and comments keep only their
+// newlines, so the line numbers in the detail still match the
+// editor; a one-line string keeps its quotes, so
+// `get_positive_number("Guess: ")` still reads as a call.
+const TRIPLE_QUOTED = /"""[\s\S]*?"""|'''[\s\S]*?'''/g;
+const SINGLE_QUOTED = /"(?:[^"\\\n]|\\.)*"|'(?:[^'\\\n]|\\.)*'/g;
+const COMMENT = /#[^\n]*/g;
+function code_only(source) {
+    return source
+        .replace(TRIPLE_QUOTED, (text) => text.replace(/[^\n]/g, ""))
+        .replace(SINGLE_QUOTED, '""')
+        .replace(COMMENT, "");
+}
+
+// Line `line_number` of the student's source as they wrote it.
+// Matching runs on the blanked source, but a detail that quoted
+// that would show `input("")` for `input("Guess: ")`, and
+// blanking keeps every newline, so the numbers line up.
+function quote_line(context, line_number) {
+    return context.source.split("\n")[line_number - 1].trim();
+}
+
+function failing_line(context, line_number, reason, advice) {
+    return {
+        pass: false,
+        detail:
+            `Line ${line_number} ${reason} ("${quote_line(context, line_number)}"). ` +
+            advice,
+    };
+}
+
+function passing_line(context, line_number) {
+    return {
+        pass: true,
+        detail: `Line ${line_number}: "${quote_line(context, line_number)}".`,
+    };
+}
+
+const LEADING_SPACE = /^[ \t]*/;
+function indent_of(text) {
+    return text.match(LEADING_SPACE)[0].length;
+}
+
+// The lines after `lines[index]` that belong to its block, as
+// `{ line_number, text }`: every line that is blank or indented
+// past it, up to the first line that is not, which is where
+// Python ends the block. It serves a def and a while alike.
+function block_after(lines, index) {
+    const header_indent = indent_of(lines[index]);
+    const block = [];
+    for (let next = index + 1; next < lines.length; next++) {
+        const text = lines[next];
+        if (text.trim() !== "" && indent_of(text) <= header_indent) break;
+        block.push({ line_number: next + 1, text });
+    }
+    return block;
+}
+
+// The def of `name` and its body, as `{ line_number, body }`, or
+// null when the source defines no such function. Any indent is
+// accepted for the def, so a function nested by mistake is still
+// found and its body still scanned.
+function function_body(source, name) {
+    const def = new RegExp(`^[ \\t]*def\\s+${name}\\s*\\(`);
+    const lines = source.split("\n");
+    for (let index = 0; index < lines.length; index++) {
+        if (def.test(lines[index])) {
+            return { line_number: index + 1, body: block_after(lines, index) };
+        }
+    }
+    return null;
+}
+
+function no_function(signature) {
+    return {
+        pass: false,
+        detail: `No ${signature.split("(")[0]}() function found. Define it with def ${signature}:.`,
+    };
+}
+
+const INPUT_CALL = /\binput\s*\(/;
+const WHILE_STATEMENT = /^[ \t]*while\b/;
+const GET_CALL = /\bget_positive_number\s*\(/;
+
+// The output rows already fail a program that never re-asks, so
+// this row is about where the re-asking lives: inside the
+// function, which is what lets play_game() trust every number it
+// is handed.
+function validation_check(context) {
+    const found = function_body(code_only(context.source), "get_positive_number");
+    if (found === null) return no_function("get_positive_number(prompt)");
+    if (!found.body.some((line) => INPUT_CALL.test(line.text))) {
+        return failing_line(
+            context, found.line_number,
+            "defines get_positive_number() but never calls input() inside it",
+            "The function itself asks, with the prompt it was given.",
+        );
+    }
+    const loop = found.body.find((line) => WHILE_STATEMENT.test(line.text));
+    if (loop === undefined) {
+        return failing_line(
+            context, found.line_number,
+            "defines get_positive_number() without a while loop inside it",
+            "The function itself re-asks until the answer is a whole number above 0.",
+        );
+    }
+    return passing_line(context, loop.line_number);
+}
+
+// Returning the typed string instead of int(answer) is the likely
+// slip. The output rows already charge for it, since comparing
+// that string with randint's int raises a TypeError on the first
+// guess, but the traceback points at play_game(); this row names
+// the return that caused it. The body's assignments are followed in
+// order, as in w5i1: a name assigned from input() holds the
+// typed string until something else is assigned to it, which is
+// what lets `answer = int(answer)` then `return answer` pass.
+const RETURN_STATEMENT = /^[ \t]*return\b(.*)$/;
+const ASSIGNMENT = /^[ \t]*([A-Za-z_]\w*)\s*=(?!=)\s*(.*)$/;
+const STRING_LITERAL_START = /^[A-Za-z]{0,2}["']/;
+function returns_check(context) {
+    const found = function_body(code_only(context.source), "get_positive_number");
+    if (found === null) return no_function("get_positive_number(prompt)");
+    const typed_names = new Set();
+    let first_return = null;
+    for (const { line_number, text } of found.body) {
+        const assignment = text.match(ASSIGNMENT);
+        if (assignment !== null) {
+            if (INPUT_CALL.test(assignment[2])) typed_names.add(assignment[1]);
+            else typed_names.delete(assignment[1]);
+        }
+        const statement = text.match(RETURN_STATEMENT);
+        if (statement === null) continue;
+        const value = statement[1].trim();
+        if (value === "") {
+            return failing_line(
+                context, line_number, "returns nothing",
+                "Return the number, converted with int().",
+            );
+        }
+        if (STRING_LITERAL_START.test(value) || typed_names.has(value)) {
+            return failing_line(
+                context, line_number, "returns a string",
+                "Convert the answer with int() and return the number.",
+            );
+        }
+        first_return ??= line_number;
+    }
+    if (first_return === null) {
+        return failing_line(
+            context, found.line_number,
+            "defines get_positive_number() without a return statement",
+            "Return the number, converted with int().",
+        );
+    }
+    return passing_line(context, first_return);
+}
+
+// Anything that checks the answer without isdigit() scores zero
+// even when isdigit() is also called: try/except lets int() do
+// the check by catching its crash, a for loop over the answer
+// reads its characters directly, and `in` tests them against a
+// list of digits. None of the three has been covered. `in` is
+// only a shortcut outside a for statement, where it is the loop's
+// own syntax.
+const TRY_STATEMENT = /^[ \t]*try\s*:/;
+const FOR_STATEMENT = /^[ \t]*for\s+(.+?)\s+in\s+(.+?)\s*:/;
+const RANGE_CALL = /^range\s*\(/;
+const IN_OPERATOR = /\bin\b/;
+const ISDIGIT_CALL = /\.isdigit\s*\(/;
+function shortcut_on(line) {
+    if (TRY_STATEMENT.test(line)) return "opens a try block, which has not been covered";
+    const loop = line.match(FOR_STATEMENT);
+    if (loop !== null) {
+        if (RANGE_CALL.test(loop[2])) return null;
+        return `loops directly over "${loop[2]}", which has not been covered`;
+    }
+    if (IN_OPERATOR.test(line)) return 'uses "in", which has not been covered';
+    return null;
+}
+
+function isdigit_check(context) {
+    const source = code_only(context.source);
+    const lines = source.split("\n");
+    for (let index = 0; index < lines.length; index++) {
+        const shortcut = shortcut_on(lines[index]);
+        if (shortcut === null) continue;
+        return failing_line(
+            context, index + 1, shortcut,
+            "Check the answer with isdigit() before calling int() instead.",
+        );
+    }
+    const found = function_body(source, "get_positive_number");
+    if (found === null) return no_function("get_positive_number(prompt)");
+    const call = found.body.find((line) => ISDIGIT_CALL.test(line.text));
+    if (call === undefined) {
+        return failing_line(
+            context, found.line_number,
+            "defines get_positive_number() without calling isdigit() inside it",
+            "Check the answer with isdigit() before calling int().",
+        );
+    }
+    return passing_line(context, call.line_number);
+}
+
+// The game has to read every guess through the validator, from
+// inside its own loop. An input() in play_game() zeroes the row
+// even when the validator is also called, since that guess is
+// never checked. The call may sit on the while line itself or
+// anywhere in its block, which covers both a guess read before
+// the loop and again at its end, and a `while True:` that reads
+// it first.
+function game_loop_check(context) {
+    const source = code_only(context.source);
+    const found = function_body(source, "play_game");
+    if (found === null) return no_function("play_game(secret)");
+    const direct = found.body.find((line) => INPUT_CALL.test(line.text));
+    if (direct !== undefined) {
+        return failing_line(
+            context, direct.line_number, "calls input() inside play_game()",
+            'Read each guess with get_positive_number("Guess: ") instead, so it is checked.',
+        );
+    }
+    const lines = source.split("\n");
+    for (const line of found.body) {
+        if (!WHILE_STATEMENT.test(line.text)) continue;
+        const loop = [line, ...block_after(lines, line.line_number - 1)];
+        if (loop.some((entry) => GET_CALL.test(entry.text))) {
+            return passing_line(context, line.line_number);
+        }
+    }
+    return failing_line(
+        context, found.line_number,
+        "defines play_game() without calling get_positive_number() in a while loop",
+        "Read each guess inside the loop, until the guess equals the secret.",
+    );
+}
+
+// The starter's randint call, with or without the space. The runner
+// returns each case's secret whatever the arguments are, so the
+// output rows cannot tell randint(1, 10) from the starter's line;
+// this needle is what can.
+const RANDINT_NEEDLES = ["randint(1, 100)", "randint(1,100)"];
+
+// The custom rows scan the blanked source, so a row's name pasted
+// back as a docstring line cannot trip its own check. The input
+// row scans the raw source, and no name contains a prompt or the
+// randint call.
+function build_criteria(results) {
+    return [
+        {
+            id: "input",
+            name: "Input handling",
+            points: 10,
+            description:
+                'Source reads each guess with get_positive_number() and the handout\'s prompt, and keeps the starter\'s random.randint(1, 100).',
+            type: "code",
+            needles: [
+                call_needles("get_positive_number", PROMPT_GUESS),
+                RANDINT_NEEDLES,
+            ],
+            mode: "all",
+        },
+        {
+            id: "output",
+            name: "Correct output",
+            points: 30,
+            description:
+                "30 points split evenly across all examples, prorated by the % of lines that match exactly.",
+            type: "output-diff",
+            cases: CASES,
+        },
+        {
+            id: "validation",
+            name: "Validation in get_positive_number()",
+            points: 8,
+            description:
+                "get_positive_number() asks with input() and re-asks in a while loop until the answer is valid.",
+            type: "custom",
+            check: validation_check,
+        },
+        {
+            id: "returns",
+            name: "Returns an int",
+            points: 8,
+            description:
+                "get_positive_number() returns the number converted with int(), rather than the answer the user typed.",
+            type: "custom",
+            check: returns_check,
+        },
+        {
+            id: "isdigit",
+            name: "Use of isdigit()",
+            points: 8,
+            description:
+                "get_positive_number() checks the answer with isdigit() before converting it with int().",
+            type: "custom",
+            check: isdigit_check,
+        },
+        {
+            id: "game-loop",
+            name: "Game loop in play_game()",
+            points: 8,
+            description:
+                "play_game() calls get_positive_number() inside a while loop to read each guess.",
+            type: "custom",
+            check: game_loop_check,
+        },
+        {
+            id: "flake8",
+            name: "flake8",
+            points: 8,
+            description:
+                "−1 point per flake8 finding, down to a floor of 0.",
+            type: "flake8",
+            partial: true,
+        },
+    ];
+}
+
+export const assignment = {
+    filename: "w5-1.py",
+    cases: CASES,
+    build_criteria,
+    max_auto_points: 80,
+};
+
+// What cs230/assignment.html?id=w5p1 shows around the grader.
+export const page = {
+    title: "Guess the Number Autograder",
+    editor: true,
+};

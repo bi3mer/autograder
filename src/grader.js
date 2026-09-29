@@ -79,6 +79,10 @@ import {
  *   ids, no behaviour change. With one, the buffer is what gets graded, a
  *   dropped file lands in it, and Run executes it against one example without
  *   spending a grading run.
+ * - `draft_path`: the path the editor's saved draft is keyed by, defaulting
+ *   to the page's own. `cs230/assignment.html` serves every assignment from
+ *   one path, so it passes the path each assignment's page used to have, and
+ *   a draft saved there before the pages were merged still comes back.
  * - `styles_href`: another stylesheet, or `false` to link none. Defaults to
  *   `css/a1.css` beside this module.
  * - `element_ids`: overrides for any of `ELEMENT_IDS_DEFAULT`.
@@ -240,29 +244,19 @@ function resolve_editor_elements(ids) {
   return elements;
 }
 
-function check_config(config) {
+/**
+ * The part of `init`'s config that grading reads: `filename`, `cases`,
+ * `build_criteria`, `max_auto_points`, `manual_rows`, and `gates`. An
+ * assignment module exports exactly this, so `grade_source` holds a caller
+ * with no page, like the terminal runner in `api/`, to the rules `init` does.
+ */
+export function check_assignment(config) {
   assert(
     config != null && typeof config === "object",
     "init: config must be an object",
   );
   assert_string(config.filename, "config.filename", FILENAME_CHARS_MAX);
   assert(config.filename.length > 0, "config.filename must not be empty");
-  const handout = handout_options(config.handout);
-  if (handout !== null) {
-    assert_string(handout.href, "config.handout.href", HANDOUT_HREF_CHARS_MAX);
-    assert(handout.href.length > 0, "config.handout.href must not be empty");
-    assert(
-      typeof handout.render_rubric === "boolean",
-      "config.handout.render_rubric must be a boolean",
-    );
-  }
-  const editor = editor_options(config.editor);
-  if (editor !== null) {
-    assert(
-      typeof editor.download === "boolean",
-      "config.editor.download must be a boolean",
-    );
-  }
   const cases = assert_array(config.cases, "config.cases", TEST_CASE_COUNT_MAX);
   assert(cases.length > 0, "config.cases must contain at least one case");
   for (let index = 0; index < cases.length; index++) {
@@ -306,6 +300,26 @@ function check_config(config) {
     assert(
       typeof gates[index].check === "function",
       `config.gates[${index}].check must be a function`,
+    );
+  }
+}
+
+function check_config(config) {
+  check_assignment(config);
+  const handout = handout_options(config.handout);
+  if (handout !== null) {
+    assert_string(handout.href, "config.handout.href", HANDOUT_HREF_CHARS_MAX);
+    assert(handout.href.length > 0, "config.handout.href must not be empty");
+    assert(
+      typeof handout.render_rubric === "boolean",
+      "config.handout.render_rubric must be a boolean",
+    );
+  }
+  const editor = editor_options(config.editor);
+  if (editor !== null) {
+    assert(
+      typeof editor.download === "boolean",
+      "config.editor.download must be a boolean",
     );
   }
 }
@@ -813,26 +827,32 @@ function run_case(config, source, test_case) {
   });
 }
 
-async function score_submission(session) {
-  assert(session.source != null, "score_submission: no submission loaded");
-  const { config } = session;
-  const source = session.source;
-
+async function score_submission(assignment, source) {
   const results = [];
-  for (let index = 0; index < config.cases.length; index++) {
-    results.push(await run_case(config, source, config.cases[index]));
+  for (let index = 0; index < assignment.cases.length; index++) {
+    results.push(await run_case(assignment, source, assignment.cases[index]));
   }
   assert(
-    results.length === config.cases.length,
+    results.length === assignment.cases.length,
     "score_submission: one result per case",
   );
 
-  const criteria = config.build_criteria(results);
+  const criteria = assignment.build_criteria(results);
   assert_array(criteria, "build_criteria() result", CRITERION_COUNT_MAX);
   return rubric.grade(criteria, { source, results });
 }
 
 /**
+ * Grade `source` against an assignment (the grading half of `init`'s config;
+ * see `check_assignment`), touching no page. The page renders what this
+ * returns, and the terminal runner in `api/` prints it, so the two cannot
+ * score one submission differently. `py_runner.init` must have finished.
+ *
+ * Returns `{ total_points, max_auto_points, zero_reason, rows, summary,
+ * submission }`. Each row is `{ mark, state, name, description, score,
+ * detail }` with `detail` as HTML; `summary` is the plain-text summary and
+ * `submission` the paste the Copy button hands the student.
+ *
  * A submission that does not compile scores zero by assignment policy, so the
  * syntax probe gates everything: there is no point diffing the output of a
  * program that never ran. A page's own gates sit beside it and zero the same
@@ -840,52 +860,77 @@ async function score_submission(session) {
  * sees everything that has to change, but the banner and the summary name
  * only the first reason.
  */
-async function grade_submission(session) {
-  assert(session.source != null, "grade_submission: no submission loaded");
-  assert(py_runner.is_ready(), "grade_submission: Python runtime is not ready");
-  const { config, elements } = session;
-  reset_output(session);
+export async function grade_source(assignment, raw_source) {
+  check_assignment(assignment);
+  assert_string(raw_source, "grade_source: source", SOURCE_BYTES_MAX);
+  assert(py_runner.is_ready(), "grade_source: Python runtime is not ready");
+  // A file saved on Windows ends its lines in \r\n, and Notepad may open it
+  // with a byte order mark. The rubric's checks split on \n and anchor on `$`,
+  // which will not match before a \r, so a correct solution lost points it
+  // had earned; and compile() rejects a BOM outright, which a browser's
+  // FileReader strips and Node's readFile keeps, so the same file scored zero
+  // in the terminal and full marks on the page. Grading reads what Python
+  // reads: one kind of line ending, no BOM.
+  const source = raw_source.replace(/^﻿/, "").replace(/\r\n?/g, "\n");
+  const gates = assignment.gates ?? [];
+  const manual_rows = assignment.manual_rows ?? [];
 
-  const probe = await run_case(config, session.source, config.cases[0]);
+  const probe = await run_case(assignment, source, assignment.cases[0]);
   const rows = [row_for_syntax(probe)];
   let zero_reason = probe.err.startsWith(SYNTAX_PREFIX) ? "syntax error" : null;
-  for (let index = 0; index < session.gates.length; index++) {
-    const row = row_for_gate(session.gates[index], session.source);
+  for (let index = 0; index < gates.length; index++) {
+    const row = row_for_gate(gates[index], source);
     rows.push(row);
     if (row.state === "fail") zero_reason ??= `failed "${row.name}"`;
   }
 
   let total_points = 0;
+  if (zero_reason === null) {
+    const report = await score_submission(assignment, source);
+    total_points = report.total;
+    for (let index = 0; index < report.items.length; index++) {
+      rows.push(row_for_item(report.items[index]));
+    }
+    for (let index = 0; index < manual_rows.length; index++) {
+      rows.push({ mark: "—", state: "pending", ...manual_rows[index] });
+    }
+  }
+
+  const summary = summary_text(
+    {
+      filename: assignment.filename,
+      total_points,
+      max_auto_points: assignment.max_auto_points,
+      zero_reason,
+    },
+    rows,
+  );
+  return {
+    total_points,
+    max_auto_points: assignment.max_auto_points,
+    zero_reason,
+    rows,
+    summary,
+    submission: submission_text(summary, source),
+  };
+}
+
+async function grade_submission(session) {
+  assert(session.source != null, "grade_submission: no submission loaded");
+  const { elements } = session;
+  reset_output(session);
+
+  const result = await grade_source(session.config, session.source);
+  const { zero_reason } = result;
   if (zero_reason !== null) {
     elements.zero.style.display = "block";
     elements.zero.textContent = zero_reason === "syntax error"
       ? SYNTAX_ZERO_MESSAGE
       : `${zero_reason[0].toUpperCase()}${zero_reason.slice(1)} — score is zero per assignment policy.`;
-  } else {
-    const report = await score_submission(session);
-    total_points = report.total;
-    for (let index = 0; index < report.items.length; index++) {
-      rows.push(row_for_item(report.items[index]));
-    }
-    for (let index = 0; index < session.manual_rows.length; index++) {
-      rows.push({ mark: "—", state: "pending", ...session.manual_rows[index] });
-    }
   }
-
-  elements.rubric.innerHTML = rows.map(row_html).join("");
-  elements.headline.textContent = String(total_points);
-  session.submission = submission_text(
-    summary_text(
-      {
-        filename: config.filename,
-        total_points,
-        max_auto_points: config.max_auto_points,
-        zero_reason,
-      },
-      rows,
-    ),
-    session.source,
-  );
+  elements.rubric.innerHTML = result.rows.map(row_html).join("");
+  elements.headline.textContent = String(result.total_points);
+  session.submission = result.submission;
   elements.summary_box.style.display = "block";
   elements.copy_status.textContent = "";
 }
@@ -1074,8 +1119,6 @@ export function init(config) {
   const session = {
     config,
     elements: resolve_elements(ids),
-    manual_rows: config.manual_rows ?? [],
-    gates: config.gates ?? [],
     source: null,
     submission: "",
     grading: false,
@@ -1087,7 +1130,10 @@ export function init(config) {
     draft_timer: 0,
     draft_key: editor_config === null
       ? ""
-      : editor_box.draft_key(globalThis.location?.pathname ?? "/", config.filename),
+      : editor_box.draft_key(
+        config.draft_path ?? globalThis.location?.pathname ?? "/",
+        config.filename,
+      ),
     anchor_prefix: editor_config === null ? undefined : diff_anchor_prefix(config),
   };
 

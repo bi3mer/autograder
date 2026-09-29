@@ -1,0 +1,180 @@
+// a1's grading rules: its cases, its rubric, and the file and points
+// they grade. a1.html imports them to grade in the browser, and
+// api/worker.js imports them to grade from the terminal, so a submission
+// scores the same either way.
+
+// Assignment 1: habit-cost calculator. Everything below is assignment data;
+// the grading engine itself lives in ../src/, loaded by the browser as
+// ES modules — there is no build step.
+
+// ---------- Expected output, computed independently of student code ----------
+// Section headers indent with 2 spaces, detail lines with 4 spaces; a tab
+// separates each label from its dollar value. The leading blank line from
+// the program's first print() is dropped by the anchor_prefix trim below.
+const CASES = [
+    {
+        name: "Example 1 — Starbuck's Coffee",
+        stdin_lines: ["Starbuck's Coffee", "100", "3.95"],
+        expected_lines: [
+            "Habit Costs for Starbuck's Coffee",
+            "  Spend per day:",
+            "    Pre tax\t$3.95",
+            "    Tax\t$0.28",
+            "    Total\t$4.23",
+            "",
+            "  Spend per month:",
+            "    Pre tax\t$120.15",
+            "    Tax\t$8.41",
+            "    Total\t$128.56",
+            "",
+            "  Spend per year:",
+            "    Pre tax\t$1441.75",
+            "    Tax\t$100.92",
+            "    Total\t$1542.67",
+        ],
+    },
+    {
+        name: "Example 2 — Lunch Out",
+        stdin_lines: ["Lunch Out", "50", "20"],
+        expected_lines: [
+            "Habit Costs for Lunch Out",
+            "  Spend per day:",
+            "    Pre tax\t$10.00",
+            "    Tax\t$0.70",
+            "    Total\t$10.70",
+            "",
+            "  Spend per month:",
+            "    Pre tax\t$304.17",
+            "    Tax\t$21.29",
+            "    Total\t$325.46",
+            "",
+            "  Spend per year:",
+            "    Pre tax\t$3650.00",
+            "    Tax\t$255.50",
+            "    Total\t$3905.50",
+        ],
+    },
+    {
+        name: "Example 3 — Dog Food",
+        stdin_lines: ["Dog Food", "3", "80"],
+        expected_lines: [
+            "Habit Costs for Dog Food",
+            "  Spend per day:",
+            "    Pre tax\t$2.40",
+            "    Tax\t$0.17",
+            "    Total\t$2.57",
+            "",
+            "  Spend per month:",
+            "    Pre tax\t$73.00",
+            "    Tax\t$5.11",
+            "    Total\t$78.11",
+            "",
+            "  Spend per year:",
+            "    Pre tax\t$876.00",
+            "    Tax\t$61.32",
+            "    Total\t$937.32",
+        ],
+    },
+];
+
+// ---------- Rubric ----------
+// Declarative criteria, scored by the rubric engine. Plain substring,
+// regex, and output-diff criteria cover this assignment; no custom code.
+function build_criteria(results) {
+    return [
+        {
+            id: "input",
+            name: "Input handling",
+            points: 10,
+            description:
+                "Source calls input() with the exact prompt text from the examples.",
+            type: "code",
+            needles: [
+                ['input("Habit name: ")', "input('Habit name: ')"],
+                [
+                    'input("Percent of days per year (0-100): ")',
+                    "input('Percent of days per year (0-100): ')",
+                ],
+                [
+                    'input("Cost before tax: ")',
+                    "input('Cost before tax: ')",
+                ],
+            ],
+            mode: "all",
+        },
+        {
+            id: "output",
+            name: "Correct output",
+            points: 20,
+            description:
+                "20 points split evenly across all examples, prorated by the % of lines that match exactly.",
+            type: "output-diff",
+            cases: CASES,
+            anchor_prefix: "Habit Costs for",
+        },
+        {
+            id: "tabs",
+            name: "Use of Tabs",
+            points: 2.5,
+            description:
+                "Value output is formatted with tabs (\\t).",
+            type: "output",
+            needle: "\t",
+        },
+        {
+            // A regex, not a parser: the f/rf prefix must sit right before the
+            // opening quote (word boundary ahead of it), so a .format() spec like
+            // ".2f" ending just before a closing quote does not count — that was a
+            // real false positive under a plain 'f"' substring check. A dict literal
+            // like d["f"] can still slip through, but that shape does not come up in
+            // a habit-cost calculator, and this is a grading preview tool.
+            id: "fstrings",
+            name: "Use of f-strings",
+            points: 2.5,
+            description: "Use of f-strings in code",
+            type: "code-regex",
+            regex: /\b(?:[rR]?[fF]|[fF][rR])["']/,
+        },
+        {
+            // A module docstring is the file's first statement, so the regex skips
+            // leading blank and comment lines, then wants a triple-quoted string
+            // holding at least one non-whitespace character. The backreference pins
+            // the closing delimiter to the opening one, so an unterminated """ does
+            // not count, and a docstring on a function rather than the module fails
+            // — this row is about the header.
+            id: "docstring",
+            name: "File docstring",
+            points: 10,
+            description:
+                "File opens with a module-level docstring, before any code.",
+            type: "code-regex",
+            regex: /^(?:[ \t]*(?:#[^\n]*)?\r?\n)*[ \t]*[rRuU]?("""|''')[\s\S]*?\S[\s\S]*?\1/,
+        },
+    ];
+}
+
+// Rubric lines this tool cannot check. Shown for completeness, excluded from
+// the automatic total, graded by the instructor.
+const MANUAL_ROWS = [
+    {
+        name: "Proper constants",
+        description:
+            "Fixed values (days/year, months/year, tax rate) as named constants, not magic numbers.",
+        score: "manual / 5",
+        detail: "Not auto-graded — this tool does not check variable or constant naming. Reviewed by the instructor.",
+    },
+    {
+        name: "Naming / comments",
+        description: "Variable names and comment quality.",
+        score: "manual / −5",
+        detail: "Not auto-graded — this tool does not check variable names or comments. Reviewed by the instructor.",
+    },
+];
+
+export const assignment = {
+    filename: "program1.py",
+    cases: CASES,
+    build_criteria,
+    manual_rows: MANUAL_ROWS,
+    max_auto_points: 45,
+};

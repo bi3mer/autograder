@@ -210,6 +210,16 @@ test("run hands randint the case's values and puts the real one back", async () 
   );
 });
 
+test("run turns os._exit into an ordinary exit and puts the real one back", async () => {
+  const { py_runner, interpreter } = await ready_runner(canned({ out: "", err: "", prompts: [] }));
+  await py_runner.run("import os\nos._exit(0)", []);
+  const driver = interpreter.python.at(-1);
+  // The real os._exit ends the interpreter, which a later run still needs.
+  assert.ok(driver.includes("os._exit = _fake_os_exit"));
+  assert.ok(driver.includes("    raise SystemExit(status)"), "caught with exit() and sys.exit()");
+  assert.ok(driver.includes("    os._exit = _os_exit_real\n"), "restored in the finally");
+});
+
 test("run defaults the deadline and rejects one outside the ceiling", async () => {
   const { py_runner, interpreter } = await ready_runner(canned({ out: "", err: "", prompts: [] }));
   await py_runner.run("print(1)", []);
