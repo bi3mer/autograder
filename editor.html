@@ -1,0 +1,56 @@
+<!doctype html>
+<html lang="en">
+    <head>
+        <meta charset="UTF-8" />
+        <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+        <title>Python Editor</title>
+        <link rel="stylesheet" href="css/a1.css" />
+    </head>
+    <body class="editor-page">
+        <!-- The same markup page.js emits for an assignment's editor, minus
+             the head, the Run bar, the stdin box, and the console. Nothing
+             here runs the code or offers completions: the textarea indents,
+             numbers its lines, and colours Python, and that is all. -->
+        <div class="editor">
+            <pre class="gutter" aria-hidden="true"><code id="gutter">1</code></pre>
+            <div class="code-wrap">
+                <pre class="highlight" aria-hidden="true"><code id="highlight"></code></pre>
+                <textarea id="code" aria-label="Python editor" spellcheck="false"
+                          autocapitalize="off" autocomplete="off" autocorrect="off"
+                          wrap="off"></textarea>
+            </div>
+        </div>
+
+        <script type="module">
+            import { assert } from "./src/assert.js";
+            import { draft_key, load_draft, save_draft, wire_editor } from "./src/editor.js";
+            import { DRAFT_SAVE_DELAY_MS, SOURCE_BYTES_MAX } from "./src/constants.js";
+
+            const textarea = document.getElementById("code");
+            const gutter = document.getElementById("gutter");
+            const highlight = document.getElementById("highlight");
+            assert(textarea != null && gutter != null && highlight != null,
+                "editor.html: the editor markup is missing an element");
+
+            // A refresh should not cost the student what they typed, so the
+            // buffer keeps a draft the way an assignment's editor does.
+            const key = draft_key(globalThis.location?.pathname ?? "/", "editor.py");
+            let draft_timer = 0;
+
+            // No on_run hook, so Ctrl+Enter does nothing.
+            const editor = wire_editor({ textarea, gutter, highlight }, {
+                on_change: (text) => {
+                    // save_draft asserts past SOURCE_BYTES_MAX, and an
+                    // assertion thrown inside an input handler fails silently.
+                    if (text.length > SOURCE_BYTES_MAX) return;
+                    globalThis.clearTimeout(draft_timer);
+                    draft_timer = globalThis.setTimeout(
+                        () => save_draft(key, text), DRAFT_SAVE_DELAY_MS,
+                    );
+                },
+            });
+            editor.set_value(load_draft(key) ?? "");
+            textarea.focus();
+        </script>
+    </body>
+</html>

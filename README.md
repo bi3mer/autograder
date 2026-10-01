@@ -290,6 +290,14 @@ buffer stops one past `OUTPUT_BYTES_MAX`. Pyodide runs on the page's only
 thread, so before this a `while True:` froze the tab with no way out but a
 reload. That was true of grading too, not just the editor.
 
+### The Standalone Editor
+
+`editor.html`, linked from the site's front page, is the same editor filling
+the whole window and nothing else. It has no Run button, no grading, and no
+completions; Ctrl+Enter does nothing because the page passes no `on_run`. It
+keeps a draft in `localStorage` under its own key, so a refresh restores the
+buffer. Its layout is the `body.editor-page` block in `css/a1.css`.
+
 ## Adding an Assignment
 
 Copy `cs230/w1p1.html` (or `cs230/w2p2.html` for one with an editor), then
