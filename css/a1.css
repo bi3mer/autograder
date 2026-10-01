@@ -352,19 +352,6 @@ footer {
 .editor .highlight .tok-decorator { color: #d2a8ff; }
 .editor .highlight .tok-op { color: #ff7b72; }
 
-/* editor.html: the editor alone, filling the window edge to edge. dvh rather
-   than vh where the browser has it, so a phone's address bar does not hide
-   the last lines. */
-body.editor-page { padding: 0; }
-.editor-page .editor {
-  height: 100vh;
-  height: 100dvh;
-  min-height: 0;
-  border: 0;
-  border-radius: 0;
-  resize: none;
-}
-
 .run-bar { display: flex; gap: 10px; align-items: center; margin: 12px 0 0; }
 .run-bar button { padding: 8px 16px; }
 .run-bar select {

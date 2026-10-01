@@ -5,6 +5,23 @@
         <meta name="viewport" content="width=device-width, initial-scale=1.0" />
         <title>Python Editor</title>
         <link rel="stylesheet" href="css/a1.css" />
+        <!-- The layout lives here rather than in a1.css. GitHub Pages lets a
+             browser cache a1.css for ten minutes, and a stale copy without
+             these rules shows the assignment pages' 46vh box instead.
+             Pinning the editor to the viewport fills the window whatever the
+             body's padding or height turns out to be. -->
+        <style>
+            body.editor-page { padding: 0; overflow: hidden; }
+            .editor-page .editor {
+                position: fixed;
+                inset: 0;
+                height: auto;
+                min-height: 0;
+                border: 0;
+                border-radius: 0;
+                resize: none;
+            }
+        </style>
     </head>
     <body class="editor-page">
         <!-- The same markup page.js emits for an assignment's editor, minus

@@ -296,7 +296,10 @@ reload. That was true of grading too, not just the editor.
 the whole window and nothing else. It has no Run button, no grading, and no
 completions; Ctrl+Enter does nothing because the page passes no `on_run`. It
 keeps a draft in `localStorage` under its own key, so a refresh restores the
-buffer. Its layout is the `body.editor-page` block in `css/a1.css`.
+buffer. Its full-window layout is a `<style>` block in the page itself rather
+than in `css/a1.css`, because GitHub Pages lets a browser cache the shared
+stylesheet for ten minutes and a stale copy would shrink the editor back to
+the assignment pages' box.
 
 ## Adding an Assignment
 
