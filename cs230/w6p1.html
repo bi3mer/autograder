@@ -1,0 +1,490 @@
+<!doctype html>
+<html lang="en">
+    <head>
+        <meta charset="UTF-8" />
+        <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+        <title>Vote Counter Autograder</title>
+        <link rel="stylesheet" href="../css/a1.css" />
+        <script src="https://cdn.jsdelivr.net/pyodide/v0.26.2/full/pyodide.js"></script>
+    </head>
+    <body>
+        <div class="split">
+            <section class="sheet">
+                <!-- The whole problem statement, fetched from w6p1.md and
+                     rendered by src/markdown.js. The file is the handout,
+                     readable on its own. -->
+                <div class="prose" id="handout"></div>
+            </section>
+
+            <section id="grader"></section>
+        </div>
+        <footer>bi3mer · Runs Python via Pyodide</footer>
+
+        <script type="module">
+            import { grader_app } from "../src/main.js";
+            import { assert } from "../src/assert.js";
+
+            // The prompt drives both the input() needle the rubric looks for
+            // and the transcript each case expects, and the two fixed lines
+            // drive the transcript, so the wording is written once here. The
+            // handout quotes all three again in w6p1.md, which is the one
+            // place they can drift.
+            const PROMPT_VOTE = "Vote: ";
+            const NO_VOTES = "No votes.";
+            const WINNER = "Winner: ";
+
+            // f"{percent:.1f}" for a percentage the case builder has already
+            // checked. Both languages compute count / total * 100 with the same
+            // IEEE operations, so the double is identical, and both round its
+            // exact value to one decimal. They differ only on an exact tie,
+            // where JS's toFixed rounds up and Python rounds to even (6.25
+            // gives "6.3" and "6.2"). A tie needs the exact value to end in
+            // .25 or .75, which is when four times it is an integer and twice
+            // it is not; the assert keeps every case off that edge.
+            function one_decimal(percent) {
+                const quarter_tie = Number.isInteger(percent * 4) && !Number.isInteger(percent * 2);
+                assert(!quarter_tie, `one_decimal: ${percent} rounds differently in Python`);
+                return percent.toFixed(1);
+            }
+
+            // A vote may be several words, as long as it is typed cleanly: the
+            // handout promises no padding, and every vote is non-empty because
+            // a blank one ends the voting.
+            function clean_vote(vote) {
+                return vote.length > 0 && vote.trim() === vote;
+            }
+
+            // A case is the votes typed at the prompt, in order. The results
+            // are computed the way the handout describes: the choices in the
+            // order each first got a vote, each with its share of the votes,
+            // then the choice with the most votes, where a tie goes to the
+            // choice listed first. Every vote is echoed after its prompt, and
+            // the blank vote that ends the voting is echoed too.
+            function vote_case(name, votes) {
+                for (const vote of votes) {
+                    assert(clean_vote(vote), `vote_case "${name}": "${vote}" must be non-empty and unpadded`);
+                }
+                const expected_lines = votes.map((vote) => PROMPT_VOTE + vote);
+                expected_lines.push(PROMPT_VOTE);
+                if (votes.length === 0) {
+                    expected_lines.push(NO_VOTES);
+                    return { name, stdin_lines: [""], expected_lines };
+                }
+
+                const choices = [];
+                for (const vote of votes) {
+                    if (!choices.includes(vote)) choices.push(vote);
+                }
+                let winner = choices[0];
+                let most = 0;
+                for (const choice of choices) {
+                    const count = votes.filter((vote) => vote === choice).length;
+                    expected_lines.push(`${choice}: ${one_decimal((count / votes.length) * 100)}%`);
+                    if (count > most) {
+                        most = count;
+                        winner = choice;
+                    }
+                }
+                expected_lines.push(WINNER + winner);
+                return { name, stdin_lines: [...votes, ""], expected_lines };
+            }
+
+            // Fourteen votes over seven languages, so every share is a
+            // repeating decimal (1/14 is 7.142857...%) and the winner is the
+            // sixth choice listed.
+            const LANGUAGES = [
+                "python", "java", "c", "python", "rust", "go", "javascript",
+                "java", "javascript", "ruby", "python", "javascript", "c",
+                "javascript",
+            ];
+
+            // Sixty votes, banana on every other one: 50.0% to banana and
+            // 25.0% each to apple and cherry.
+            const FRUIT = Array.from({ length: 60 }, (_, index) => ["apple", "banana", "cherry", "banana"][index % 4]);
+
+            // Cases 1-3 are the handout's examples. Case 2 is a tie, which
+            // catches >= in place of > when tracking the winner, and case 3 is
+            // the empty ballot. Cases 4 and 5 have one choice, where an
+            // off-by-one count shows as a share other than 100.0%. Case 6's
+            // winner is in the middle and case 7's arrives last, which catch a
+            // winner taken from the first or last choice. Case 8's votes are
+            // two words, which catches a vote split into words. Case 9 is a
+            // three-way tie. Case 10 has seven choices and repeating-decimal
+            // shares. Case 11 is sixty votes, which catches a loop capped at a
+            // fixed count.
+            const CASES = [
+                vote_case(
+                    "Example 1 — pizza wins with half the votes",
+                    ["pizza", "tacos", "pizza", "sushi", "pizza", "sushi"],
+                ),
+                vote_case(
+                    "Example 2 — a tie goes to the choice voted for first",
+                    ["tacos", "pizza", "pizza", "tacos"],
+                ),
+                vote_case("Example 3 — no votes at all", []),
+                vote_case("Example 4 — a single vote", ["chess"]),
+                vote_case("Example 5 — every vote the same", ["yes", "yes", "yes", "yes", "yes"]),
+                vote_case(
+                    "Example 6 — the winner is the middle choice",
+                    ["red", "blue", "green", "blue", "red", "blue"],
+                ),
+                vote_case(
+                    "Example 7 — the winner's first vote comes last",
+                    ["cats", "dogs", "fish", "fish", "fish"],
+                ),
+                vote_case(
+                    "Example 8 — a vote can be more than one word",
+                    ["ice cream", "apple pie", "ice cream", "carrot cake", "ice cream", "apple pie"],
+                ),
+                vote_case(
+                    "Example 9 — a three-way tie",
+                    ["north", "south", "east", "east", "south", "north"],
+                ),
+                vote_case("Example 10 — seven choices, fourteen votes", LANGUAGES),
+                vote_case("Example 11 — sixty votes", FRUIT),
+            ];
+
+            // Both quote styles, and with or without the trailing space, so a
+            // student is graded on the prompt's wording rather than on which
+            // quote character they reached for.
+            function prompt_needles(prompt) {
+                const trimmed = prompt.trimEnd();
+                return [
+                    `input("${prompt}")`,
+                    `input('${prompt}')`,
+                    `input("${trimmed}")`,
+                    `input('${trimmed}')`,
+                ];
+            }
+
+            // Strings and comments are blanked before scanning, as in w5p1.
+            // The summary students paste in as a docstring is prose, and its
+            // "Input loop in read_votes()" line would otherwise read as the
+            // `in` operator. Docstrings and comments keep only their
+            // newlines, so the line numbers in the detail still match the
+            // editor. A one-line string, f-strings included, keeps only its
+            // quotes and prefix, so the braces of f"{choice}" are gone and a
+            // `{` left in the code is a dict or a set.
+            const TRIPLE_QUOTED = /"""[\s\S]*?"""|'''[\s\S]*?'''/g;
+            const SINGLE_QUOTED = /"(?:[^"\\\n]|\\.)*"|'(?:[^'\\\n]|\\.)*'/g;
+            const COMMENT = /#[^\n]*/g;
+            function code_only(source) {
+                return source
+                    .replace(TRIPLE_QUOTED, (text) => text.replace(/[^\n]/g, ""))
+                    .replace(SINGLE_QUOTED, '""')
+                    .replace(COMMENT, "");
+            }
+
+            // Line `line_number` of the student's source as they wrote it.
+            // Matching runs on the blanked source, but blanking keeps every
+            // newline, so the numbers line up.
+            function quote_line(context, line_number) {
+                return context.source.split("\n")[line_number - 1].trim();
+            }
+
+            function failing_line(context, line_number, reason, advice) {
+                return {
+                    pass: false,
+                    detail:
+                        `Line ${line_number} ${reason} ("${quote_line(context, line_number)}"). ` +
+                        advice,
+                };
+            }
+
+            function passing_line(context, line_number) {
+                return {
+                    pass: true,
+                    detail: `Line ${line_number}: "${quote_line(context, line_number)}".`,
+                };
+            }
+
+            const LEADING_SPACE = /^[ \t]*/;
+            function indent_of(text) {
+                return text.match(LEADING_SPACE)[0].length;
+            }
+
+            // The lines after `lines[index]` that belong to its block, as
+            // `{ line_number, text }`: every line that is blank or indented
+            // past it, up to the first line that is not, which is where
+            // Python ends the block. It serves a def and a loop alike.
+            function block_after(lines, index) {
+                const header_indent = indent_of(lines[index]);
+                const block = [];
+                for (let next = index + 1; next < lines.length; next++) {
+                    const text = lines[next];
+                    if (text.trim() !== "" && indent_of(text) <= header_indent) break;
+                    block.push({ line_number: next + 1, text });
+                }
+                return block;
+            }
+
+            // The def of `name` and its body, as `{ line_number, body }`, or
+            // null when the source defines no such function. Any indent is
+            // accepted for the def, so a function nested by mistake is still
+            // found and its body still scanned.
+            function function_body(source, name) {
+                const def = new RegExp(`^[ \\t]*def\\s+${name}\\s*\\(`);
+                const lines = source.split("\n");
+                for (let index = 0; index < lines.length; index++) {
+                    if (def.test(lines[index])) {
+                        return { line_number: index + 1, body: block_after(lines, index) };
+                    }
+                }
+                return null;
+            }
+
+            function no_function(signature) {
+                return {
+                    pass: false,
+                    detail: `No ${signature.split("(")[0]}() function found. Define it with def ${signature}:.`,
+                };
+            }
+
+            const INPUT_CALL = /\binput\s*\(/;
+            const PRINT_CALL = /\bprint\s*\(/;
+            const WHILE_STATEMENT = /^[ \t]*while\b/;
+            const LOOP_STATEMENT = /^[ \t]*(?:for|while)\b/;
+
+            // The output rows already fail a program that stops after one
+            // vote, so this row is about where the reading lives: inside
+            // read_votes(), in a loop, with the printing left to
+            // print_results().
+            function input_loop_check(context) {
+                const found = function_body(code_only(context.source), "read_votes");
+                if (found === null) return no_function("read_votes()");
+                const printed = found.body.find((line) => PRINT_CALL.test(line.text));
+                if (printed !== undefined) {
+                    return failing_line(
+                        context, printed.line_number, "calls print() inside read_votes()",
+                        "read_votes() only collects the votes; print_results() prints.",
+                    );
+                }
+                if (!found.body.some((line) => INPUT_CALL.test(line.text))) {
+                    return failing_line(
+                        context, found.line_number, "defines read_votes() but never calls input() inside it",
+                        'The function itself asks for each vote with input("Vote: ").',
+                    );
+                }
+                const loop = found.body.find((line) => WHILE_STATEMENT.test(line.text));
+                if (loop === undefined) {
+                    return failing_line(
+                        context, found.line_number, "defines read_votes() without a while loop inside it",
+                        "Keep asking in a loop until the vote is blank.",
+                    );
+                }
+                return passing_line(context, loop.line_number);
+            }
+
+            // read_votes() must hand back the list it built. The body's
+            // assignments are followed in order, as in w5p1: a name assigned
+            // `[]` or `list()` holds a list until something else is assigned
+            // to it, so returning the typed vote, or nothing, names the line.
+            const ASSIGNMENT = /^[ \t]*([A-Za-z_]\w*)\s*=(?!=)\s*(.*)$/;
+            const EMPTY_LIST = /^(?:\[\s*\]|list\s*\(\s*\))$/;
+            const RETURN_STATEMENT = /^[ \t]*return\b(.*)$/;
+            function returns_list_check(context) {
+                const found = function_body(code_only(context.source), "read_votes");
+                if (found === null) return no_function("read_votes()");
+                const list_names = new Set();
+                let first_return = null;
+                for (const { line_number, text } of found.body) {
+                    const assignment = text.match(ASSIGNMENT);
+                    if (assignment !== null) {
+                        if (EMPTY_LIST.test(assignment[2].trim())) list_names.add(assignment[1]);
+                        else list_names.delete(assignment[1]);
+                    }
+                    const statement = text.match(RETURN_STATEMENT);
+                    if (statement === null) continue;
+                    if (!list_names.has(statement[1].trim())) {
+                        return failing_line(
+                            context, line_number, "does not return the list of votes",
+                            "Start with an empty list, append each vote to it, and return that list.",
+                        );
+                    }
+                    first_return ??= line_number;
+                }
+                if (first_return === null) {
+                    return failing_line(
+                        context, found.line_number, "defines read_votes() without a return statement",
+                        "Return the list of votes after the loop.",
+                    );
+                }
+                return passing_line(context, first_return);
+            }
+
+            // print_results() needs each choice once, which is a second list
+            // grown with append() and guarded by an `in` test. `in` counts
+            // only outside a for statement, where it is the loop's own syntax.
+            const FOR_STATEMENT = /^[ \t]*for\s+.+?\s+in\s+.+?\s*:/;
+            const IN_OPERATOR = /\bin\b/;
+            const APPEND_CALL = /\.\s*append\s*\(/;
+            function distinct_check(context) {
+                const found = function_body(code_only(context.source), "print_results");
+                if (found === null) return no_function("print_results(votes)");
+                const test = found.body.find(
+                    (line) => !FOR_STATEMENT.test(line.text) && IN_OPERATOR.test(line.text),
+                );
+                if (test === undefined) {
+                    return failing_line(
+                        context, found.line_number,
+                        "defines print_results() without checking whether a choice is already listed",
+                        "Build a list of the choices, adding a vote only when it is not in that list yet.",
+                    );
+                }
+                if (!found.body.some((line) => APPEND_CALL.test(line.text))) {
+                    return failing_line(
+                        context, found.line_number, "defines print_results() without calling append() inside it",
+                        "Add each new choice to the end of the list of choices with .append().",
+                    );
+                }
+                return passing_line(context, test.line_number);
+            }
+
+            // Counting one choice at a time is a loop inside a loop. Anything
+            // that counts without one scores zero even when the loops are also
+            // present: .count() does the inner loop in one call, .index()
+            // finds a choice's position without a loop, and a dict or a set
+            // keyed by choice skips the list of choices. None of them has been
+            // covered.
+            const COUNT_CALL = /\.\s*count\s*\(/;
+            const INDEX_CALL = /\.\s*index\s*\(/;
+            const DICT_OR_SET = /\{|\b(?:dict|set)\s*\(/;
+            function shortcut_on(line) {
+                if (COUNT_CALL.test(line)) return "calls .count(), which has not been covered";
+                if (INDEX_CALL.test(line)) return "calls .index(), which has not been covered";
+                if (DICT_OR_SET.test(line)) return "builds a dict or a set, which has not been covered";
+                return null;
+            }
+
+            function counting_check(context) {
+                const source = code_only(context.source);
+                const lines = source.split("\n");
+                for (let index = 0; index < lines.length; index++) {
+                    const shortcut = shortcut_on(lines[index]);
+                    if (shortcut === null) continue;
+                    return failing_line(
+                        context, index + 1, shortcut,
+                        "Count each choice with a loop over the votes instead.",
+                    );
+                }
+                const found = function_body(source, "print_results");
+                if (found === null) return no_function("print_results(votes)");
+                for (const outer of found.body) {
+                    if (!LOOP_STATEMENT.test(outer.text)) continue;
+                    const inner = block_after(lines, outer.line_number - 1).find(
+                        (line) => LOOP_STATEMENT.test(line.text),
+                    );
+                    if (inner !== undefined) return passing_line(context, inner.line_number);
+                }
+                return failing_line(
+                    context, found.line_number, "defines print_results() without a loop inside another loop",
+                    "For each choice, loop over the votes and count the ones that match it.",
+                );
+            }
+
+            // A module that counts does the whole problem
+            // (collections.Counter), so an import is not a lost row but a zero
+            // for the submission, the same as a syntax error. The gate scans
+            // the blanked source, so the rubric's "Uses no imports" line pasted
+            // into the docstring cannot trip it. Both statement forms, and only
+            // at the start of a line.
+            const IMPORT_STATEMENT = /^[ \t]*(?:import|from)\s+\w/;
+            function no_import_check(source) {
+                const lines = code_only(source).split("\n");
+                for (let index = 0; index < lines.length; index++) {
+                    if (!IMPORT_STATEMENT.test(lines[index])) continue;
+                    return failing_line(
+                        { source }, index + 1, "imports a module",
+                        "The program needs only lists, loops, and input(). An import scores zero.",
+                    );
+                }
+                return { pass: true, detail: "" };
+            }
+
+            // The custom rows scan the blanked source, so a row's name pasted
+            // back as a docstring line cannot trip its own check. The input
+            // row scans the raw source, and no name contains the prompt.
+            function build_criteria(results) {
+                return [
+                    {
+                        id: "input",
+                        name: "Input handling",
+                        points: 10,
+                        description:
+                            "Source calls input() with the exact prompt text from the handout.",
+                        type: "code",
+                        needles: [prompt_needles(PROMPT_VOTE)],
+                        mode: "all",
+                    },
+                    {
+                        id: "output",
+                        name: "Correct output",
+                        points: 30,
+                        description:
+                            "30 points split evenly across all examples, prorated by the % of lines that match exactly.",
+                        type: "output-diff",
+                        cases: CASES,
+                    },
+                    {
+                        id: "input-loop",
+                        name: "Input loop in read_votes()",
+                        points: 10,
+                        description:
+                            "read_votes() asks for votes with input() inside a while loop and prints nothing.",
+                        type: "custom",
+                        check: input_loop_check,
+                    },
+                    {
+                        id: "returns",
+                        name: "Returns the list",
+                        points: 10,
+                        description:
+                            "read_votes() returns the list it built, rather than a single vote or nothing.",
+                        type: "custom",
+                        check: returns_list_check,
+                    },
+                    {
+                        id: "distinct",
+                        name: "List of distinct choices",
+                        points: 10,
+                        description:
+                            "print_results() builds a list holding each choice once, appending a vote only when it is not listed yet.",
+                        type: "custom",
+                        check: distinct_check,
+                    },
+                    {
+                        id: "counting",
+                        name: "Counting with nested loops",
+                        points: 10,
+                        description:
+                            "print_results() counts each choice with a loop over the votes, inside its loop over the choices.",
+                        type: "custom",
+                        check: counting_check,
+                    },
+                ];
+            }
+
+            // The right column only: w6p1.md fills the left, and the page
+            // carries its own footer below both.
+            grader_app.init({
+                filename: "w6-1.py",
+                editor: true,
+                title: "Submission",
+                subtitle: "Graded in this tab · nothing leaves your browser",
+                cases: CASES,
+                build_criteria,
+                max_auto_points: 80,
+                mount: "#grader",
+                handout: "w6p1.md",
+                gates: [
+                    {
+                        name: "Uses no imports",
+                        description:
+                            "Gate: importing a module forces a total score of zero, the same as a syntax error.",
+                        check: no_import_check,
+                    },
+                ],
+            });
+        </script>
+    </body>
+</html>

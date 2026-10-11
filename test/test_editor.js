@@ -15,6 +15,7 @@ import { AssertionError } from "../src/assert.js";
 import {
   break_line, draft_key, gutter_text, indent_selection, line_offset, next_indent,
   stdin_lines_from_text,
+  stdin_text_from_lines,
 } from "../src/editor.js";
 
 test("next_indent keeps the current depth", () => {
@@ -104,6 +105,22 @@ test("the stdin box is one input per line, minus the newline the student typed",
   assert.deepEqual(stdin_lines_from_text(""), []);
   assert.deepEqual(stdin_lines_from_text("a\r\nb\r\n"), ["a", "b"], "CRLF is not input");
   assert.deepEqual(stdin_lines_from_text("\n"), [""], "one deliberately empty answer");
+});
+
+test("a case's stdin survives the box, closing blank answer included", () => {
+  const cases = [
+    [],
+    [""],
+    ["10", "3"],
+    ["ada", "lovelace", "grace", "hopper", ""],
+    ["", "00", "0", "", "63"],
+    ["pizza", "", ""],
+  ];
+  for (const lines of cases) {
+    assert.deepEqual(stdin_lines_from_text(stdin_text_from_lines(lines)), lines, JSON.stringify(lines));
+  }
+  assert.equal(stdin_text_from_lines(["ada", ""]), "ada\n\n", "the blank answer shows as an empty last line");
+  assert.throws(() => stdin_text_from_lines(["a\nb"]), /newline/);
 });
 
 test("drafts are keyed per page, so two assignments do not overwrite each other", () => {

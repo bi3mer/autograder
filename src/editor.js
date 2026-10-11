@@ -21,7 +21,7 @@
  * - `wire_editor` returns a handle, `{ get_value, set_value, focus_line }`.
  */
 
-import { assert, assert_range, assert_string } from "./assert.js";
+import { assert, assert_array, assert_range, assert_string } from "./assert.js";
 import { highlight_html } from "./highlight.js";
 import {
   DRAFT_BYTES_MAX,
@@ -170,6 +170,23 @@ export function stdin_lines_from_text(text) {
     `stdin_lines_from_text: over ${STDIN_LINE_COUNT_MAX} lines`,
   );
   return lines;
+}
+
+/**
+ * The box text that `stdin_lines_from_text` reads back as `lines`, for
+ * filling the box from a case. Every line ends in a newline, because the
+ * reader drops the one a typed box ends with: joining with "\n" alone would
+ * hand that function a case's closing blank answer as the newline to drop,
+ * and a program that reads until a blank line would run out of input.
+ */
+export function stdin_text_from_lines(lines) {
+  assert_array(lines, "stdin_text_from_lines: lines", STDIN_LINE_COUNT_MAX);
+  for (const line of lines) {
+    assert_string(line, "stdin_text_from_lines: line", SOURCE_BYTES_MAX);
+    assert(!/[\r\n]/.test(line), "stdin_text_from_lines: a line must not contain a newline");
+  }
+  if (lines.length === 0) return "";
+  return `${lines.join("\n")}\n`;
 }
 
 /**

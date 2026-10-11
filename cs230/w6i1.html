@@ -1,0 +1,375 @@
+<!doctype html>
+<html lang="en">
+    <head>
+        <meta charset="UTF-8" />
+        <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+        <title>Sign-In Sheet Autograder</title>
+        <link rel="stylesheet" href="../css/a1.css" />
+        <script src="https://cdn.jsdelivr.net/pyodide/v0.26.2/full/pyodide.js"></script>
+    </head>
+    <body>
+        <div class="split">
+            <section class="sheet">
+                <!-- The whole problem statement, fetched from w6i1.md and
+                     rendered by src/markdown.js. The file is the handout,
+                     readable on its own. -->
+                <div class="prose" id="handout"></div>
+            </section>
+
+            <section id="grader"></section>
+        </div>
+        <footer>bi3mer · Runs Python via Pyodide</footer>
+
+        <script type="module">
+            import { grader_app } from "../src/main.js";
+            import { assert } from "../src/assert.js";
+
+            // The prompts drive both the input() needles the rubric looks for
+            // and the transcript each case expects, so the wording is written
+            // once here. The handout quotes them again in w6i1.md, which is
+            // the one place they can drift.
+            const PROMPT_FIRST = "What is your first name? ";
+            const PROMPT_LAST = "What is your last name? ";
+
+            // The handout's rule: first letter uppercase, every other letter
+            // lowercase, which is what str.capitalize() does to ASCII.
+            function capitalized(name) {
+                return name[0].toUpperCase() + name.slice(1).toLowerCase();
+            }
+
+            // print() of a list of strings, as Python writes it. Every name
+            // is asserted to be letters only, so each item is '...' with
+            // nothing to escape.
+            function python_list(names) {
+                return `[${names.map((name) => `'${name}'`).join(", ")}]`;
+            }
+
+            // One word of ASCII letters. A space or a hyphen is where
+            // capitalize() and title() disagree ("Mary jane" against
+            // "Mary Jane"), and the handout lets students use either, so no
+            // case may contain one. A quote would change Python's repr.
+            const NAME = /^[A-Za-z]+$/;
+
+            // A case is the people who sign in, as [first, last] pairs, then
+            // how the sign-in ends. With `dropped` null the next first name is
+            // blank; otherwise `dropped` is typed as a first name and the last
+            // name after it is blank, which ends the loop without adding that
+            // person. Every answer is echoed after its prompt, and the handout's
+            // last two lines print the two lists, so the transcript is
+            // generated from the pairs.
+            function sign_in_case(name, people, dropped = null) {
+                const stdin_lines = [];
+                const expected_lines = [];
+                for (const [first, last] of people) {
+                    assert(NAME.test(first), `sign_in_case "${name}": "${first}" must be letters only`);
+                    assert(NAME.test(last), `sign_in_case "${name}": "${last}" must be letters only`);
+                    stdin_lines.push(first, last);
+                    expected_lines.push(PROMPT_FIRST + first, PROMPT_LAST + last);
+                }
+                if (dropped === null) {
+                    stdin_lines.push("");
+                    expected_lines.push(PROMPT_FIRST);
+                } else {
+                    assert(NAME.test(dropped), `sign_in_case "${name}": "${dropped}" must be letters only`);
+                    stdin_lines.push(dropped, "");
+                    expected_lines.push(PROMPT_FIRST + dropped, PROMPT_LAST);
+                }
+                expected_lines.push(
+                    python_list(people.map(([first]) => capitalized(first))),
+                    python_list(people.map(([, last]) => capitalized(last))),
+                );
+                return { name, stdin_lines, expected_lines };
+            }
+
+            const PIONEERS = [
+                ["ada", "lovelace"], ["grace", "hopper"], ["alan", "turing"],
+                ["KATHERINE", "johnson"], ["dOROTHY", "vaughan"], ["mary", "jackson"],
+                ["margaret", "hamilton"], ["barbara", "liskov"], ["donald", "knuth"],
+                ["edsger", "dijkstra"], ["frances", "allen"], ["dennis", "ritchie"],
+            ];
+
+            // Cases 1-3 are the handout's examples. Cases 2 and 5 end on a
+            // blank last name, which catches a first name appended before the
+            // last name is read. Case 3's mixed case catches a name stored as
+            // typed, or with only its first letter raised. Case 4 stops at
+            // once, which catches a loop that appends before checking. Case 7
+            // repeats a first name, which must be kept. Case 8 is twelve
+            // people, which catches a loop capped at a fixed count.
+            const CASES = [
+                sign_in_case(
+                    "Example 1 — two people, then a blank first name",
+                    [["ada", "lovelace"], ["grace", "hopper"]],
+                ),
+                sign_in_case(
+                    "Example 2 — a blank last name leaves katherine out",
+                    [["alan", "turing"]], "katherine",
+                ),
+                sign_in_case(
+                    "Example 3 — capitals are fixed",
+                    [["gRACE", "HOPPER"], ["ADA", "lovelace"]],
+                ),
+                sign_in_case("Example 4 — a blank first name right away", []),
+                sign_in_case("Example 5 — a blank last name for the first person", [], "ada"),
+                sign_in_case("Example 6 — one person", [["linus", "torvalds"]]),
+                sign_in_case(
+                    "Example 7 — a repeated first name is kept",
+                    [["john", "smith"], ["mary", "jones"], ["john", "doe"]],
+                ),
+                sign_in_case("Example 8 — twelve people", PIONEERS),
+            ];
+
+            // Both quote styles, and with or without the trailing space, so a
+            // student is graded on the prompt's wording rather than on which
+            // quote character they reached for.
+            function prompt_needles(prompt) {
+                const trimmed = prompt.trimEnd();
+                return [
+                    `input("${prompt}")`,
+                    `input('${prompt}')`,
+                    `input("${trimmed}")`,
+                    `input('${trimmed}')`,
+                ];
+            }
+
+            // Strings and comments are blanked before scanning, as in w5i2.
+            // The summary students paste in as a docstring is prose, and its
+            // "Two lists built with append" line would otherwise read as code.
+            // Docstrings and comments keep only their newlines, so the line
+            // numbers in the detail still match the editor.
+            const TRIPLE_QUOTED = /"""[\s\S]*?"""|'''[\s\S]*?'''/g;
+            const SINGLE_QUOTED = /"(?:[^"\\\n]|\\.)*"|'(?:[^'\\\n]|\\.)*'/g;
+            const COMMENT = /#[^\n]*/g;
+            function code_only(source) {
+                return source
+                    .replace(TRIPLE_QUOTED, (text) => text.replace(/[^\n]/g, ""))
+                    .replace(SINGLE_QUOTED, '""')
+                    .replace(COMMENT, "");
+            }
+
+            // Line `line_number` of the student's source as they wrote it.
+            // Matching runs on the blanked source, but blanking keeps every
+            // newline, so the numbers line up.
+            function quote_line(context, line_number) {
+                return context.source.split("\n")[line_number - 1].trim();
+            }
+
+            function failing_line(context, line_number, reason, advice) {
+                return {
+                    pass: false,
+                    detail:
+                        `Line ${line_number} ${reason} ("${quote_line(context, line_number)}"). ` +
+                        advice,
+                };
+            }
+
+            function passing_line(context, line_number) {
+                return {
+                    pass: true,
+                    detail: `Line ${line_number}: "${quote_line(context, line_number)}".`,
+                };
+            }
+
+            // The def of `name` and its body, as `{ line_number, body }`, or
+            // null when the source defines no such function. The body is
+            // every line after the def that is blank or indented past it, up
+            // to the first line that is not, which is where Python ends the
+            // block.
+            const LEADING_SPACE = /^[ \t]*/;
+            function function_body(source, name) {
+                const def = new RegExp(`^([ \\t]*)def\\s+${name}\\s*\\(`);
+                const lines = source.split("\n");
+                for (let index = 0; index < lines.length; index++) {
+                    const match = lines[index].match(def);
+                    if (match === null) continue;
+                    const def_indent = match[1].length;
+                    const body = [];
+                    for (let next = index + 1; next < lines.length; next++) {
+                        const text = lines[next];
+                        const indent = text.match(LEADING_SPACE)[0].length;
+                        if (text.trim() !== "" && indent <= def_indent) break;
+                        body.push({ line_number: next + 1, text });
+                    }
+                    return { line_number: index + 1, body };
+                }
+                return null;
+            }
+
+            const NO_READ_NAMES = {
+                pass: false,
+                detail: "No read_names() function found. Define it with def read_names():.",
+            };
+
+            // The output rows already fail a program that reads only one
+            // person, so this row is about where the reading lives: inside
+            // read_names(), which is what makes it a function the closing
+            // lines can call. `while True:` with a break passes like any
+            // other while.
+            const INPUT_CALL = /\binput\s*\(/;
+            const WHILE_STATEMENT = /^[ \t]*while\b/;
+            function loop_check(context) {
+                const found = function_body(code_only(context.source), "read_names");
+                if (found === null) return NO_READ_NAMES;
+                if (!found.body.some((line) => INPUT_CALL.test(line.text))) {
+                    return failing_line(
+                        context, found.line_number,
+                        "defines read_names() but never calls input() inside it",
+                        "The function itself asks for each name.",
+                    );
+                }
+                const loop = found.body.find((line) => WHILE_STATEMENT.test(line.text));
+                if (loop === undefined) {
+                    return failing_line(
+                        context, found.line_number, "defines read_names() without a while loop inside it",
+                        "Keep asking in a loop until a name is blank.",
+                    );
+                }
+                return passing_line(context, loop.line_number);
+            }
+
+            // append() on two different lists is the practice. A list grown
+            // another way, with insert() or by adding a one-item list, never
+            // calls append(), so the row fails anyway; finding that line lets
+            // the detail say what to change rather than only that append()
+            // is missing.
+            const APPEND_CALL = /\b([A-Za-z_]\w*)\s*\.\s*append\s*\(/;
+            const OTHER_GROWTH = /\.\s*insert\s*\(|\+=?\s*\[/;
+            function append_check(context) {
+                const found = function_body(code_only(context.source), "read_names");
+                if (found === null) return NO_READ_NAMES;
+                const receivers = new Map();
+                for (const { line_number, text } of found.body) {
+                    const call = text.match(APPEND_CALL);
+                    if (call !== null && !receivers.has(call[1])) receivers.set(call[1], line_number);
+                }
+                if (receivers.size >= 2) {
+                    const shown = [...receivers.values()].slice(0, 2).map(
+                        (line_number) => `Line ${line_number}: "${quote_line(context, line_number)}"`,
+                    );
+                    return { pass: true, detail: `${shown.join("; ")}.` };
+                }
+                const other = found.body.find((line) => OTHER_GROWTH.test(line.text));
+                if (other !== undefined) {
+                    return failing_line(
+                        context, other.line_number, "adds to a list without append()",
+                        "Add each name to the end of its list with .append() instead.",
+                    );
+                }
+                if (receivers.size === 1) {
+                    const [[name, line_number]] = receivers;
+                    return failing_line(
+                        context, line_number, `calls append() only on ${name}`,
+                        "Keep first names and last names in two separate lists, and append to each.",
+                    );
+                }
+                return failing_line(
+                    context, found.line_number, "defines read_names() without calling append() inside it",
+                    "Add each name to the end of its list with .append().",
+                );
+            }
+
+            // The closing lines unpack two values, so each return must hand
+            // back both lists, separated by a comma; parentheses around them
+            // are allowed. A print() inside the function is the other slip,
+            // since printing is the closing lines' job.
+            const PRINT_CALL = /\bprint\s*\(/;
+            const RETURN_STATEMENT = /^[ \t]*return\b(.*)$/;
+            const TWO_NAMES = /^\(?\s*[A-Za-z_]\w*\s*,\s*[A-Za-z_]\w*\s*\)?$/;
+            function returns_check(context) {
+                const found = function_body(code_only(context.source), "read_names");
+                if (found === null) return NO_READ_NAMES;
+                let first_return = null;
+                for (const { line_number, text } of found.body) {
+                    if (PRINT_CALL.test(text)) {
+                        return failing_line(
+                            context, line_number, "calls print() inside read_names()",
+                            "Return the lists instead; the closing lines print them.",
+                        );
+                    }
+                    const statement = text.match(RETURN_STATEMENT);
+                    if (statement === null) continue;
+                    if (!TWO_NAMES.test(statement[1].trim())) {
+                        return failing_line(
+                            context, line_number, "does not return two lists",
+                            "Return both lists, separated by a comma: return first_list, second_list.",
+                        );
+                    }
+                    first_return ??= line_number;
+                }
+                if (first_return === null) {
+                    return failing_line(
+                        context, found.line_number, "defines read_names() without a return statement",
+                        "Return both lists, separated by a comma.",
+                    );
+                }
+                return passing_line(context, first_return);
+            }
+
+            // The custom rows scan the blanked source, so a row's name pasted
+            // back as a docstring line cannot trip its own check. The input
+            // row scans the raw source, and no name contains a prompt.
+            function build_criteria(results) {
+                return [
+                    {
+                        id: "input",
+                        name: "Input handling",
+                        points: 5,
+                        description:
+                            "Source calls input() with both prompts, worded exactly as in the handout.",
+                        type: "code",
+                        needles: [prompt_needles(PROMPT_FIRST), prompt_needles(PROMPT_LAST)],
+                        mode: "all",
+                    },
+                    {
+                        id: "output",
+                        name: "Correct output",
+                        points: 20,
+                        description:
+                            "20 points split evenly across all examples, prorated by the % of lines that match exactly.",
+                        type: "output-diff",
+                        cases: CASES,
+                    },
+                    {
+                        id: "loop",
+                        name: "Loop in read_names()",
+                        points: 5,
+                        description: "read_names() asks for names with input() inside a while loop.",
+                        type: "custom",
+                        check: loop_check,
+                    },
+                    {
+                        id: "append",
+                        name: "Two lists built with append",
+                        points: 5,
+                        description:
+                            "read_names() adds first names and last names to two separate lists with .append().",
+                        type: "custom",
+                        check: append_check,
+                    },
+                    {
+                        id: "returns",
+                        name: "Returns both lists",
+                        points: 5,
+                        description:
+                            "read_names() returns both lists, separated by a comma, and prints nothing.",
+                        type: "custom",
+                        check: returns_check,
+                    },
+                ];
+            }
+
+            // The right column only: w6i1.md fills the left, and the page
+            // carries its own footer below both.
+            grader_app.init({
+                filename: "w6-i1.py",
+                editor: true,
+                title: "Submission",
+                subtitle: "Graded in this tab · nothing leaves your browser",
+                cases: CASES,
+                build_criteria,
+                max_auto_points: 40,
+                mount: "#grader",
+                handout: "w6i1.md",
+            });
+        </script>
+    </body>
+</html>

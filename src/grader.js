@@ -660,7 +660,7 @@ function fill_case_picker(session) {
 function sync_stdin_to_case(session) {
   const test_case = selected_case(session);
   if (test_case == null) return;
-  session.editor_elements.stdin.value = test_case.stdin_lines.join("\n");
+  session.editor_elements.stdin.value = editor_box.stdin_text_from_lines(test_case.stdin_lines);
 }
 
 function wire_editor_pane(session) {
