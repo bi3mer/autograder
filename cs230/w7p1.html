@@ -1,0 +1,505 @@
+<!doctype html>
+<html lang="en">
+    <head>
+        <meta charset="UTF-8" />
+        <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+        <title>To-Do List Autograder</title>
+        <link rel="stylesheet" href="../css/a1.css" />
+        <script src="https://cdn.jsdelivr.net/pyodide/v0.26.2/full/pyodide.js"></script>
+    </head>
+    <body>
+        <div class="split">
+            <section class="sheet">
+                <!-- The whole problem statement, fetched from w7p1.md and
+                     rendered by src/markdown.js. The file is the handout,
+                     readable on its own. -->
+                <div class="prose" id="handout"></div>
+            </section>
+
+            <section id="grader"></section>
+        </div>
+        <footer>bi3mer · Runs Python via Pyodide</footer>
+
+        <script type="module">
+            import { grader_app } from "../src/main.js";
+            import { assert } from "../src/assert.js";
+
+            // The prompts drive both the input() needles the rubric looks for
+            // and the transcript each case expects, and the fixed lines drive
+            // the transcript, so the wording is written once here. The handout
+            // quotes all of them again in w7p1.md, which is the one place they
+            // can drift.
+            const PROMPT_COMMAND = "Command: ";
+            const PROMPT_TASK = "Task: ";
+            const PROMPT_NUMBER = "Number: ";
+            const NOTHING_TO_DO = "Nothing to do.";
+            const UNKNOWN_COMMAND = "Unknown command.";
+            const NOT_A_NUMBER = "Not a task number.";
+            const TASKS_LEFT = "Tasks left: ";
+            const COMMANDS_WITH_TEXT = ["add", "first", "done"];
+
+            // What int() makes of the text typed at the "Number: " prompt, or
+            // null when int() raises. int() takes surrounding whitespace, a
+            // sign, and digits, which the regex matches; it also takes
+            // underscores between digits and digits from other scripts, which
+            // the regex would wrongly reject. No case types either, and the
+            // asserts keep it that way, so the two agree on every case.
+            const PYTHON_INT = /^\s*[+-]?\d+\s*$/;
+            function python_int(text) {
+                assert(!text.includes("_"), `python_int: "${text}" has an underscore, which int() accepts`);
+                assert(/^[\x20-\x7e]*$/.test(text), `python_int: "${text}" must be printable ASCII`);
+                if (!PYTHON_INT.test(text)) return null;
+                const number = Number.parseInt(text.trim(), 10);
+                assert(Number.isSafeInteger(number) && !Object.is(number, -0), `python_int: "${text}" out of range`);
+                return number;
+            }
+
+            // A task is echoed after its prompt and printed by list, so one
+            // with padding or nothing in it would hide trailing spaces in the
+            // transcript.
+            function clean_task(task) {
+                return task.length > 0 && task.trim() === task;
+            }
+
+            // The line one done prints, after taking the task off `tasks` the
+            // way the handout describes: 0 and negative numbers are not tasks,
+            // even though pop(-1) would take one.
+            function finish_line(tasks, text) {
+                const number = python_int(text);
+                if (number === null) return NOT_A_NUMBER;
+                if (number < 1 || number > tasks.length) return `There is no task ${number}.`;
+                return `Done: ${tasks.splice(number - 1, 1)[0]}`;
+            }
+
+            // A case is the commands typed, in order, each as [command, text]
+            // with the text its follow-up prompt reads: a task for add and
+            // first, a number for done. The transcript is worked out on a list
+            // kept here. Every answer is echoed after its prompt, and the case
+            // ends with the blank command and the count of tasks left.
+            function todo_case(name, steps) {
+                const tasks = [];
+                const stdin_lines = [];
+                const expected_lines = [];
+                for (const [command, text] of steps) {
+                    assert(command !== "", `todo_case "${name}": the blank command is added at the end`);
+                    const asks = COMMANDS_WITH_TEXT.includes(command);
+                    assert(asks === (text !== undefined), `todo_case "${name}": "${command}" text mismatch`);
+                    stdin_lines.push(command);
+                    expected_lines.push(PROMPT_COMMAND + command);
+                    if (command === "add" || command === "first") {
+                        assert(clean_task(text), `todo_case "${name}": task "${text}" must be non-empty and unpadded`);
+                        stdin_lines.push(text);
+                        expected_lines.push(PROMPT_TASK + text);
+                        if (command === "add") tasks.push(text);
+                        else tasks.unshift(text);
+                    } else if (command === "done") {
+                        stdin_lines.push(text);
+                        expected_lines.push(PROMPT_NUMBER + text);
+                        expected_lines.push(finish_line(tasks, text));
+                    } else if (command === "list") {
+                        if (tasks.length === 0) expected_lines.push(NOTHING_TO_DO);
+                        tasks.forEach((task, index) => expected_lines.push(`${index + 1}. ${task}`));
+                    } else {
+                        expected_lines.push(UNKNOWN_COMMAND);
+                    }
+                }
+                stdin_lines.push("");
+                expected_lines.push(PROMPT_COMMAND, TASKS_LEFT + tasks.length);
+                return { name, stdin_lines, expected_lines };
+            }
+
+            const TWELVE_TASKS = Array.from({ length: 12 }, (_, index) => ["add", `Chapter ${index + 1} notes`]);
+
+            // Cases 1-3 are the handout's examples. Case 2's 0 and case 5's 0
+            // and -1 catch a done that leans on pop() raising IndexError,
+            // since pop(-1) takes the last task instead. Case 4 fills the list
+            // with first only, which catches insert() at the end. Case 6's
+            // spaces catch an isdigit() check in place of int(). Case 7 takes
+            // the last task and then asks for it again. Case 8 catches
+            // commands matched without regard to case. Case 9 has twelve
+            // tasks, which catches a list capped at a fixed size, and case 10
+            // types a blank number. Case 11 types no commands at all.
+            const CASES = [
+                todo_case("Example 1 — add, first, list, and done", [
+                    ["add", "Buy milk"], ["add", "Call mom"], ["first", "Pay rent"], ["list"],
+                    ["done", "2"], ["list"],
+                ]),
+                todo_case("Example 2 — task numbers that are not tasks", [
+                    ["add", "Study for quiz"], ["done", "one"], ["done", "1.5"], ["done", "0"],
+                    ["done", "4"], ["done", "1"], ["list"],
+                ]),
+                todo_case("Example 3 — an empty list and an unknown command", [
+                    ["list"], ["done", "1"], ["remove"],
+                ]),
+                todo_case("Example 4 — each first goes in front of the one before", [
+                    ["first", "Water plants"], ["first", "Walk dog"], ["first", "Feed cat"], ["list"],
+                    ["done", "1"], ["list"],
+                ]),
+                todo_case("Example 5 — 0 and -1 are not tasks", [
+                    ["add", "Laundry"], ["add", "Dishes"], ["add", "Vacuum"], ["done", "-1"],
+                    ["done", "0"], ["list"],
+                ]),
+                todo_case("Example 6 — spaces around the number", [
+                    ["add", "Read chapter 7"], ["add", "Email Prof. Lee"], ["done", " 2 "], ["list"],
+                ]),
+                todo_case("Example 7 — the last task, then the same number again", [
+                    ["add", "Pack"], ["add", "Drive"], ["add", "Unpack"], ["done", "3"], ["done", "3"],
+                    ["list"],
+                ]),
+                todo_case("Example 8 — commands are lowercase", [["add", "Shop"], ["Add"], ["LIST"], ["list"]]),
+                todo_case("Example 9 — twelve tasks", [...TWELVE_TASKS, ["done", "12"], ["done", "1"], ["list"]]),
+                todo_case("Example 10 — a blank number and a word", [
+                    ["add", "Nap"], ["done", ""], ["done", "first"], ["list"],
+                ]),
+                todo_case("Example 11 — no commands at all", []),
+            ];
+
+            // Both quote styles, and with or without the trailing space, so a
+            // student is graded on the prompt's wording rather than on which
+            // quote character they reached for.
+            function prompt_needles(prompt) {
+                const trimmed = prompt.trimEnd();
+                return [
+                    `input("${prompt}")`,
+                    `input('${prompt}')`,
+                    `input("${trimmed}")`,
+                    `input('${trimmed}')`,
+                ];
+            }
+
+            // Strings and comments are blanked before scanning, as in w6p1.
+            // The summary students paste in as a docstring is prose, and its
+            // "Catches ValueError in finish_task()" line would otherwise read
+            // as code. Docstrings and comments keep only their newlines, so
+            // the line numbers in the detail still match the editor.
+            const TRIPLE_QUOTED = /"""[\s\S]*?"""|'''[\s\S]*?'''/g;
+            const SINGLE_QUOTED = /"(?:[^"\\\n]|\\.)*"|'(?:[^'\\\n]|\\.)*'/g;
+            const COMMENT = /#[^\n]*/g;
+            function code_only(source) {
+                return source
+                    .replace(TRIPLE_QUOTED, (text) => text.replace(/[^\n]/g, ""))
+                    .replace(SINGLE_QUOTED, '""')
+                    .replace(COMMENT, "");
+            }
+
+            // code_only() blanks an f-string's fields too, which hides a call
+            // made inside one, as in f"{letter_grade(score)}". This keeps the
+            // expressions inside an f-string's braces and blanks the rest,
+            // for the checks that look for a call. Each string stays on its
+            // own line, so line numbers still match.
+            const PREFIXED_STRING = /(\b[rRbBuUfF]{1,2})?("(?:[^"\\\n]|\\.)*"|'(?:[^'\\\n]|\\.)*')/g;
+            const FSTRING_FIELD = /\{([^{}]*)\}/g;
+            function code_and_fields(source) {
+                return source
+                    .replace(TRIPLE_QUOTED, (text) => text.replace(/[^\n]/g, ""))
+                    .replace(PREFIXED_STRING, (text, prefix) => {
+                        if (prefix === undefined || !/f/i.test(prefix)) return '""';
+                        const fields = [...text.matchAll(FSTRING_FIELD)].map((field) => field[1]);
+                        return `"" ${fields.join(" ")} ""`;
+                    })
+                    .replace(COMMENT, "");
+            }
+
+            // Line `line_number` of the student's source as they wrote it.
+            // Matching runs on the blanked source, but blanking keeps every
+            // newline, so the numbers line up.
+            function quote_line(context, line_number) {
+                return context.source.split("\n")[line_number - 1].trim();
+            }
+
+            function failing_line(context, line_number, reason, advice) {
+                return {
+                    pass: false,
+                    detail:
+                        `Line ${line_number} ${reason} ("${quote_line(context, line_number)}"). ` +
+                        advice,
+                };
+            }
+
+            function passing_line(context, line_number) {
+                return {
+                    pass: true,
+                    detail: `Line ${line_number}: "${quote_line(context, line_number)}".`,
+                };
+            }
+
+            // The def of `name` and its body, as `{ line_number, body }`, or
+            // null when the source defines no such function. The body is
+            // every line after the def that is blank or indented past it, up
+            // to the first line that is not, which is where Python ends the
+            // block.
+            const LEADING_SPACE = /^[ \t]*/;
+            function function_body(source, name) {
+                const def = new RegExp(`^([ \\t]*)def\\s+${name}\\s*\\(`);
+                const lines = source.split("\n");
+                for (let index = 0; index < lines.length; index++) {
+                    const match = lines[index].match(def);
+                    if (match === null) continue;
+                    const def_indent = match[1].length;
+                    const body = [];
+                    for (let next = index + 1; next < lines.length; next++) {
+                        const text = lines[next];
+                        const indent = text.match(LEADING_SPACE)[0].length;
+                        if (text.trim() !== "" && indent <= def_indent) break;
+                        body.push({ line_number: next + 1, text });
+                    }
+                    return { line_number: index + 1, body };
+                }
+                return null;
+            }
+
+            function no_function(signature) {
+                return {
+                    pass: false,
+                    detail: `No ${signature.split("(")[0]}() function found. Define it with def ${signature}:.`,
+                };
+            }
+
+            const FINISH_SIGNATURE = "finish_task(tasks, text)";
+
+            // A bare except, or one naming Exception, also swallows the
+            // NameError from a typo, which the Find the Bug slide shows. So
+            // the row wants ValueError named, and a broad except anywhere in
+            // finish_task() fails it even when ValueError is caught too.
+            const TRY_STATEMENT = /^[ \t]*try\s*:/;
+            const EXCEPT_BARE = /^[ \t]*except\s*:/;
+            const EXCEPT_BROAD = /^[ \t]*except\s*\(?\s*(?:Base)?Exception\b/;
+            const EXCEPT_VALUE_ERROR = /^[ \t]*except\b[^:]*\bValueError\b/;
+            function value_error_check(context) {
+                const found = function_body(code_only(context.source), "finish_task");
+                if (found === null) return no_function(FINISH_SIGNATURE);
+                const broad = found.body.find(
+                    (line) => EXCEPT_BARE.test(line.text) || EXCEPT_BROAD.test(line.text),
+                );
+                if (broad !== undefined) {
+                    return failing_line(
+                        context, broad.line_number, "catches every exception",
+                        "Name the one int() raises, except ValueError:, so other bugs still show.",
+                    );
+                }
+                if (!found.body.some((line) => TRY_STATEMENT.test(line.text))) {
+                    return failing_line(
+                        context, found.line_number, "defines finish_task() without a try block",
+                        "Call int() inside try:, and print the message in except ValueError:.",
+                    );
+                }
+                const caught = found.body.find((line) => EXCEPT_VALUE_ERROR.test(line.text));
+                if (caught === undefined) {
+                    return failing_line(
+                        context, found.line_number, "defines finish_task() without except ValueError:",
+                        "int() raises a ValueError on text that is not a whole number.",
+                    );
+                }
+                return passing_line(context, caught.line_number);
+            }
+
+            // first is insert() at index 0. Building a new list with
+            // [task] + tasks prints the same transcript, so the output rows
+            // cannot tell; this row can.
+            const INSERT_FRONT = /\.\s*insert\s*\(\s*0\s*,/;
+            function insert_check(context) {
+                const lines = code_and_fields(context.source).split("\n");
+                const index = lines.findIndex((line) => INSERT_FRONT.test(line));
+                if (index === -1) {
+                    return {
+                        pass: false,
+                        detail: "No insert(0, ...) call found. first puts the task at index 0 with insert().",
+                    };
+                }
+                return passing_line(context, index + 1);
+            }
+
+            // done prints the task it removed, and pop() is the removal that
+            // hands the task back. Indexing it first and then using del or
+            // remove() prints the same transcript, which is why this is a row.
+            const POP_CALL = /\.\s*pop\s*\(/;
+            function pop_check(context) {
+                const found = function_body(code_and_fields(context.source), "finish_task");
+                if (found === null) return no_function(FINISH_SIGNATURE);
+                const popped = found.body.find((line) => POP_CALL.test(line.text));
+                if (popped === undefined) {
+                    return failing_line(
+                        context, found.line_number, "defines finish_task() without calling pop() inside it",
+                        "pop() takes the task off the list and hands it back, ready to print.",
+                    );
+                }
+                return passing_line(context, popped.line_number);
+            }
+
+            // finish_task() works on the caller's list, which is copy by
+            // reference from the changing-lists slides. Three things break
+            // that: returning a list (or anything but None), rebinding the
+            // parameter to a new list, and storing what the call returns. A
+            // bare return and return None are fine.
+            const RETURN_STATEMENT = /^[ \t]*return\b\s*(.*)$/;
+            const CALL_STORED = /[^=!<>]=\s*finish_task\s*\(/;
+            const FIRST_PARAMETER = /def\s+finish_task\s*\(\s*([A-Za-z_]\w*)/;
+            function in_place_check(context) {
+                const source = code_only(context.source);
+                const found = function_body(source, "finish_task");
+                if (found === null) return no_function(FINISH_SIGNATURE);
+                const returned = found.body.find((line) => {
+                    const statement = line.text.match(RETURN_STATEMENT);
+                    return statement !== null && !["", "None"].includes(statement[1].trim());
+                });
+                if (returned !== undefined) {
+                    return failing_line(
+                        context, returned.line_number, "returns a value from finish_task()",
+                        "Change the list it was given and return nothing; the caller shares that list.",
+                    );
+                }
+                const lines = source.split("\n");
+                const parameter = lines[found.line_number - 1].match(FIRST_PARAMETER);
+                if (parameter !== null) {
+                    const rebind = new RegExp(`^[ \\t]*${parameter[1]}\\s*=(?!=)`);
+                    const rebound = found.body.find((line) => rebind.test(line.text));
+                    if (rebound !== undefined) {
+                        return failing_line(
+                            context, rebound.line_number, `assigns a new value to ${parameter[1]}`,
+                            "That builds a list only finish_task() can see. Take the task off the list itself.",
+                        );
+                    }
+                }
+                const stored = lines.findIndex((line) => CALL_STORED.test(line));
+                if (stored !== -1) {
+                    return failing_line(
+                        context, stored + 1, "stores what finish_task() returns",
+                        "finish_task() returns None. Call it on a line of its own; the list changes in place.",
+                    );
+                }
+                return passing_line(context, found.line_number);
+            }
+
+            // main() holds the program's work, and the program ends with the
+            // __main__ check calling it. That check compares strings, so it is
+            // matched with strings kept and only docstrings and comments
+            // blanked; the summary pasted at the top is a docstring, so its
+            // row name cannot pass the row. Any other line at the left margin,
+            // besides a def or an import, is code running outside a function.
+            const MAIN_GUARD = /^if\s+(?:__name__\s*==\s*(["'])__main__\1|(["'])__main__\2\s*==\s*__name__)\s*:\s*$/;
+            const MAIN_CALL = /^[ \t]+main\s*\(\s*\)\s*$/;
+            const TOP_LEVEL_ALLOWED = /^(?:def|import|from)\s/;
+            const INDENTED = /^[ \t]/;
+            function main_check(context) {
+                const blanked = code_only(context.source).split("\n");
+                if (function_body(blanked.join("\n"), "main") === null) return no_function("main()");
+                const kept = context.source
+                    .replace(TRIPLE_QUOTED, (text) => text.replace(/[^\n]/g, ""))
+                    .replace(COMMENT, "")
+                    .split("\n");
+                const guard = kept.findIndex((line) => MAIN_GUARD.test(line));
+                for (let index = 0; index < blanked.length; index++) {
+                    const line = blanked[index];
+                    if (line.trim() === "" || INDENTED.test(line)) continue;
+                    if (index === guard || TOP_LEVEL_ALLOWED.test(line)) continue;
+                    return failing_line(
+                        context, index + 1, "runs outside any function",
+                        "Move it into main(), and end the program with the last two lines of the starter code.",
+                    );
+                }
+                if (guard === -1) {
+                    return {
+                        pass: false,
+                        detail: 'No if __name__ == "__main__": line found. End the program with the last two lines of the starter code.',
+                    };
+                }
+                const call = kept.slice(guard + 1).find((line) => line.trim() !== "");
+                if (call === undefined || !MAIN_CALL.test(call)) {
+                    return failing_line(
+                        context, guard + 1, "is not followed by a call to main()",
+                        "Put main() on the line under it, indented.",
+                    );
+                }
+                return passing_line(context, guard + 1);
+            }
+
+            // The custom rows scan the blanked source, so a row's name pasted
+            // back as a docstring line cannot trip its own check. The input
+            // row scans the raw source, and no row name contains a prompt.
+            function build_criteria(results) {
+                return [
+                    {
+                        id: "input",
+                        name: "Input handling",
+                        points: 10,
+                        description:
+                            "Source calls input() with each of the three exact prompts from the handout.",
+                        type: "code",
+                        needles: [
+                            prompt_needles(PROMPT_COMMAND),
+                            prompt_needles(PROMPT_TASK),
+                            prompt_needles(PROMPT_NUMBER),
+                        ],
+                        mode: "all",
+                    },
+                    {
+                        id: "output",
+                        name: "Correct output",
+                        points: 30,
+                        description:
+                            "30 points split evenly across all examples, prorated by the % of lines that match exactly.",
+                        type: "output-diff",
+                        cases: CASES,
+                    },
+                    {
+                        id: "value-error",
+                        name: "Catches ValueError in finish_task()",
+                        points: 10,
+                        description:
+                            "finish_task() converts the number inside try: and names ValueError in its except.",
+                        type: "custom",
+                        check: value_error_check,
+                    },
+                    {
+                        id: "insert",
+                        name: "Adds to the front with insert()",
+                        points: 5,
+                        description: "first adds its task with insert() at index 0.",
+                        type: "custom",
+                        check: insert_check,
+                    },
+                    {
+                        id: "pop",
+                        name: "Removes with pop()",
+                        points: 10,
+                        description: "finish_task() takes the task off the list with pop().",
+                        type: "custom",
+                        check: pop_check,
+                    },
+                    {
+                        id: "in-place",
+                        name: "finish_task() changes the list",
+                        points: 10,
+                        description:
+                            "finish_task() changes the list it was given and returns nothing, and the call's result is not stored.",
+                        type: "custom",
+                        check: in_place_check,
+                    },
+                    {
+                        id: "main",
+                        name: "Runs from main()",
+                        points: 5,
+                        description:
+                            'Every line runs inside a function, and the program ends with if __name__ == "__main__": calling main().',
+                        type: "custom",
+                        check: main_check,
+                    },
+                ];
+            }
+
+            // The right column only: w7p1.md fills the left, and the page
+            // carries its own footer below both.
+            grader_app.init({
+                filename: "w7-1.py",
+                editor: true,
+                title: "Submission",
+                subtitle: "Graded in this tab · nothing leaves your browser",
+                cases: CASES,
+                build_criteria,
+                max_auto_points: 80,
+                mount: "#grader",
+                handout: "w7p1.md",
+            });
+        </script>
+    </body>
+</html>

@@ -13,7 +13,7 @@
 
 import { assert, assert_array, assert_range, assert_string } from "./assert.js";
 import {
-  FILENAME_CHARS_MAX, LINE_COUNT_MAX, LINE_LENGTH_CHARS_DEFAULT, LINE_LENGTH_CHARS_MAX,
+  CASE_FILE_CHARS_MAX, CASE_FILE_COUNT_MAX, FILENAME_CHARS_MAX, LINE_COUNT_MAX, LINE_LENGTH_CHARS_DEFAULT, LINE_LENGTH_CHARS_MAX,
   LINT_FILENAME, LINT_FINDING_COUNT_MAX, OUTPUT_BYTES_MAX, RANDINT_VALUE_COUNT_MAX,
   RUN_TIMEOUT_MS, RUN_TIMEOUT_MS_MAX, SOURCE_BYTES_MAX, STDIN_LINE_COUNT_MAX,
   SUBMISSION_FILENAME_DEFAULT, TRACE_CHECK_INTERVAL_EVENTS,
@@ -104,6 +104,23 @@ function check_filename(filename) {
   assert(name.length > 0, "filename must not be empty");
   assert(!name.includes("/") && !name.includes("\\"), `filename must not contain a path: ${name}`);
   return name;
+}
+
+/**
+ * A case's files as `[name, text]` pairs, after checking each name is a bare
+ * filename: a path could write outside the run's own directory.
+ */
+export function check_files(files, name) {
+  assert(
+    files != null && typeof files === "object" && !Array.isArray(files),
+    `${name} must be an object of name to contents`,
+  );
+  const pairs = assert_array(Object.entries(files), name, CASE_FILE_COUNT_MAX);
+  for (const [file_name, text] of pairs) {
+    check_filename(file_name);
+    assert_string(text, `${name}["${file_name}"]`, CASE_FILE_CHARS_MAX);
+  }
+  return pairs;
 }
 
 /**
@@ -198,14 +215,21 @@ export function flake8_failure_reason() {
  * instead would tie each case to whatever Mersenne Twister makes of a seed.
  * The `random` module outlives the run, since every run shares one
  * interpreter, so the real function goes back in the `finally`.
+ *
+ * `file_pairs` are `[name, text]` files written into a fresh empty directory
+ * that the run starts in, so `open("data.txt")` finds this case's copy. The
+ * filesystem outlives the run for the same reason `random` does: without a
+ * directory per run, a file one case wrote would still be there for the next
+ * case to read. The `finally` steps back out and deletes it.
  */
-function build_run_python(code, stdin_lines, filename, timeout_ms, randint_values) {
+function build_run_python(code, stdin_lines, filename, timeout_ms, randint_values, file_pairs) {
   assert(typeof code === "string", "build_run_python: code must be a string");
   assert(Array.isArray(stdin_lines), "build_run_python: stdin_lines must be an array");
   assert(Array.isArray(randint_values), "build_run_python: randint_values must be an array");
+  assert(Array.isArray(file_pairs), "build_run_python: file_pairs must be an array");
   assert_range(timeout_ms, "build_run_python: timeout_ms", 1, RUN_TIMEOUT_MS_MAX);
   return `
-import sys, io, json, time, random, builtins, traceback, linecache
+import os, sys, io, json, time, random, shutil, builtins, tempfile, traceback, linecache
 
 _name = ${JSON.stringify(filename)}
 _src = json.loads(${embed(code)})
@@ -267,6 +291,13 @@ def _fake_randint(a, b):
 
 if _randint_values:
     random.randint = _fake_randint
+
+_home = os.getcwd()
+_work = tempfile.mkdtemp()
+os.chdir(_work)
+for _file_name, _file_text in json.loads(${embed(file_pairs)}):
+    with open(_file_name, "w") as _fh:
+        _fh.write(_file_text)
 
 # Reading the clock on every line costs more than the check saves, so the
 # counter samples it instead.
@@ -338,6 +369,8 @@ except BaseException as _e:
 finally:
     sys.stdout = _old
     random.randint = _randint_real
+    os.chdir(_home)
+    shutil.rmtree(_work, ignore_errors=True)
 json.dumps({"out": _out.getvalue(), "err": _err, "prompts": _prompts,
             "kind": _kind, "line": _line, "col": _col})
 `;
@@ -350,8 +383,9 @@ json.dumps({"out": _out.getvalue(), "err": _err, "prompts": _prompts,
  * back in `err` and the rubric decides what it costs. Only a broken runner
  * throws.
  *
- * `options` takes `filename`, `timeout_ms`, and `randint_values`, the
- * numbers `random.randint` returns in call order (see `build_run_python`).
+ * `options` takes `filename`, `timeout_ms`, `randint_values`, the numbers
+ * `random.randint` returns in call order, and `files`, an object of
+ * `{ "name.txt": "contents" }` the program can open (see `build_run_python`).
  */
 export async function run(code, stdin_lines, options = {}) {
   assert(is_ready(), "run: called before init() resolved");
@@ -375,9 +409,11 @@ export async function run(code, stdin_lines, options = {}) {
     );
   }
 
+  const file_pairs = check_files(options.files ?? {}, "run: files");
+
   assert(pyodide != null, "run: interpreter must be loaded");
   const encoded = await pyodide.runPythonAsync(
-    build_run_python(code, stdin_lines, filename, timeout_ms, randint_values),
+    build_run_python(code, stdin_lines, filename, timeout_ms, randint_values, file_pairs),
   );
   assert(typeof encoded === "string", "run: driver must return a JSON string");
   const result = JSON.parse(encoded);

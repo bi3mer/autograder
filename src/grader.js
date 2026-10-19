@@ -47,9 +47,11 @@ import {
  *   inside Pyodide (so tracebacks read `program1.py`), heads the copyable
  *   summary, and fills the default drop prompt. The upload itself is only
  *   checked for a `.py` extension, not for this exact name.
- * - `cases`: `{ name, stdin_lines, expected_lines, randint_values }` per
- *   example, run in order. `randint_values` is optional: the numbers
+ * - `cases`: `{ name, stdin_lines, expected_lines, randint_values, files }`
+ *   per example, run in order. `randint_values` is optional: the numbers
  *   `random.randint` returns, call by call, for a program that picks one.
+ *   `files` is optional too: `{ "name.txt": "contents" }`, written into the
+ *   run's working directory so the program can `open()` them.
  *   `cases[0]` also drives the syntax-error probe that gates the whole run.
  * - `build_criteria(results)`: returns the rubric `rubric.grade` scores.
  * - `max_auto_points`: the denominator shown beside the total.
@@ -287,6 +289,7 @@ function check_config(config) {
       `config.cases[${index}].randint_values`,
       RANDINT_VALUE_COUNT_MAX,
     );
+    py_runner.check_files(test_case.files ?? {}, `config.cases[${index}].files`);
   }
   assert(
     typeof config.build_criteria === "function",
@@ -530,6 +533,22 @@ function selected_case(session) {
   return session.config.cases[index] ?? null;
 }
 
+/**
+ * Every file any case carries, for "Input of my own": the student types a
+ * filename at the prompt, and any of the examples' files should be there to
+ * open. Two cases may share a name, so the first case's copy wins.
+ */
+function every_case_file(config) {
+  assert(config != null, "every_case_file: config must not be null");
+  const files = {};
+  for (const test_case of config.cases) {
+    for (const [name, text] of Object.entries(test_case.files ?? {})) {
+      files[name] ??= text;
+    }
+  }
+  return files;
+}
+
 /** Drop the tag `py_runner` puts on an error; the console is not parsing it. */
 function untagged(err) {
   assert(typeof err === "string", "untagged: err must be a string");
@@ -592,6 +611,7 @@ async function run_once(session) {
     const result = await py_runner.run(session.source, stdin_lines, {
       filename: session.config.filename,
       randint_values: test_case?.randint_values ?? [],
+      files: test_case?.files ?? every_case_file(session.config),
     });
     elements.console.innerHTML = run_console_html(session, result, test_case);
     elements.run_status.textContent = result.err === "" ? "Ran." : "Stopped.";
@@ -804,12 +824,13 @@ async function accept_file(session, file) {
   elements.status.textContent = "File loaded. Ready to grade.";
 }
 
-/** One case, run the way grading runs it: its stdin and its randint values. */
+/** One case, run the way grading runs it: its stdin, randint values, and files. */
 function run_case(config, source, test_case) {
   assert(test_case != null, "run_case: test_case must not be null");
   return py_runner.run(source, test_case.stdin_lines, {
     filename: config.filename,
     randint_values: test_case.randint_values ?? [],
+    files: test_case.files ?? {},
   });
 }
 

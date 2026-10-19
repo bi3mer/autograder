@@ -210,6 +210,37 @@ test("run hands randint the case's values and puts the real one back", async () 
   );
 });
 
+test("run writes the case's files into a directory of its own and removes it", async () => {
+  const { py_runner, interpreter } = await ready_runner(canned({ out: "", err: "", prompts: [] }));
+  await py_runner.run("print(1)", [], { files: { "groceries.txt": "milk\neggs\n" } });
+  const driver = interpreter.python.at(-1);
+  assert.ok(driver.includes(JSON.stringify(JSON.stringify([["groceries.txt", "milk\neggs\n"]]))));
+  assert.ok(driver.includes("os.chdir(_work)"));
+  // Every run shares one filesystem, so a file one case wrote would otherwise
+  // be there for the next case to read.
+  assert.ok(driver.includes("    os.chdir(_home)\n"), "back out in the finally");
+  assert.ok(driver.includes("    shutil.rmtree(_work"), "deleted in the finally");
+
+  await py_runner.run("print(1)", []);
+  assert.ok(interpreter.python.at(-1).includes(JSON.stringify(JSON.stringify([]))));
+});
+
+test("run refuses files with a path, non-string contents, or the wrong shape", async () => {
+  const { py_runner } = await ready_runner(canned({ out: "", err: "", prompts: [] }));
+  await assert.rejects(
+    () => py_runner.run("x", [], { files: { "../escape.txt": "" } }),
+    /filename must not contain a path/,
+  );
+  await assert.rejects(
+    () => py_runner.run("x", [], { files: { "a.txt": 3 } }),
+    /files\["a.txt"\]/,
+  );
+  await assert.rejects(
+    () => py_runner.run("x", [], { files: [["a.txt", ""]] }),
+    /files must be an object/,
+  );
+});
+
 test("run defaults the deadline and rejects one outside the ceiling", async () => {
   const { py_runner, interpreter } = await ready_runner(canned({ out: "", err: "", prompts: [] }));
   await py_runner.run("print(1)", []);

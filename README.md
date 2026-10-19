@@ -325,6 +325,15 @@ function back afterwards, and a program that calls it more often than the
 case supplies stops with a sentence saying so. `cs230/w5p1.html` uses it to
 fix each example's secret.
 
+A program that reads a file needs that file to exist, so a case can carry
+`files`: `{ "groceries.txt": "milk\neggs\n" }`. Each run starts in a fresh,
+empty directory holding only its own case's files, and the runner deletes the
+directory afterwards, so nothing one case writes is left for the next. Names
+must be bare filenames, without a path. In the editor, "Input of my own" gets
+every case's files, so a student can type any example's filename.
+`cs230/w7p2.html` fetches its files from beside the page, which keeps the
+copies students download and the copies the grader uses the same.
+
 A construct an assignment forbids outright goes in `gates` rather than in a
 criterion, because a criterion's zero leaves the rest of the score standing.
 Each gate is `{ name, description, check }`, and `check(source)` returns
