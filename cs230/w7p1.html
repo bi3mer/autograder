@@ -32,11 +32,14 @@
             const PROMPT_COMMAND = "Command: ";
             const PROMPT_TASK = "Task: ";
             const PROMPT_NUMBER = "Number: ";
+            const PROMPT_YES_NO = "Yes or no? ";
             const NOTHING_TO_DO = "Nothing to do.";
             const UNKNOWN_COMMAND = "Unknown command.";
             const NOT_A_NUMBER = "Not a task number.";
             const TASKS_LEFT = "Tasks left: ";
             const COMMANDS_WITH_TEXT = ["add", "first", "done"];
+            const ANSWERS_YES = ["yes", "y"];
+            const ANSWERS_NO = ["no", "n"];
 
             // What int() makes of the text typed at the "Number: " prompt, or
             // null when int() raises. int() takes surrounding whitespace, a
@@ -54,6 +57,14 @@
                 return number;
             }
 
+            // Commands and answers are matched in any case, as Python's
+            // lower() would. The two lowercase alike only in ASCII, and the
+            // assert keeps every command and answer there.
+            function python_lower(text) {
+                assert(/^[\x20-\x7e]*$/.test(text), `python_lower: "${text}" must be printable ASCII`);
+                return text.toLowerCase();
+            }
+
             // A task is echoed after its prompt and printed by list, so one
             // with padding or nothing in it would hide trailing spaces in the
             // transcript.
@@ -61,42 +72,69 @@
                 return task.length > 0 && task.trim() === task;
             }
 
-            // The line one done prints, after taking the task off `tasks` the
-            // way the handout describes: 0 and negative numbers are not tasks,
-            // even though pop(-1) would take one.
-            function finish_line(tasks, text) {
+            // The lines one done prints after its number, taking the task
+            // off `tasks` the way the handout describes: 0 and negative
+            // numbers are not tasks, even though pop(-1) would take one. A
+            // real task is named and then confirmed with `answers`, every one
+            // but the last invalid, so yes_or_no() asks again; a number with
+            // no task asks nothing and takes no answers. yes, y, no, and n are
+            // valid in any case.
+            function finish_lines(name, tasks, text, answers) {
                 const number = python_int(text);
-                if (number === null) return NOT_A_NUMBER;
-                if (number < 1 || number > tasks.length) return `There is no task ${number}.`;
-                return `Done: ${tasks.splice(number - 1, 1)[0]}`;
+                let missing = null;
+                if (number === null) missing = NOT_A_NUMBER;
+                else if (number < 1 || number > tasks.length) missing = `There is no task ${number}.`;
+                if (missing !== null) {
+                    assert(answers.length === 0, `todo_case "${name}": done "${text}" asks nothing`);
+                    return [missing];
+                }
+                assert(answers.length > 0, `todo_case "${name}": done "${text}" needs an answer`);
+                const valid = (answer) => [...ANSWERS_YES, ...ANSWERS_NO].includes(python_lower(answer));
+                answers.forEach((answer, index) => {
+                    const last = index === answers.length - 1;
+                    assert(valid(answer) === last, `todo_case "${name}": only the last answer is yes or no`);
+                    assert(clean_task(answer), `todo_case "${name}": answer "${answer}" must be non-empty and unpadded`);
+                });
+                const task = tasks[number - 1];
+                const confirmed = ANSWERS_YES.includes(python_lower(answers[answers.length - 1]));
+                if (confirmed) tasks.splice(number - 1, 1);
+                return [
+                    `Finish ${task}?`,
+                    ...answers.map((answer) => PROMPT_YES_NO + answer),
+                    confirmed ? `Done: ${task}` : `Kept: ${task}`,
+                ];
             }
 
             // A case is the commands typed, in order, each as [command, text]
             // with the text its follow-up prompt reads: a task for add and
-            // first, a number for done. The transcript is worked out on a list
-            // kept here. Every answer is echoed after its prompt, and the case
-            // ends with the blank command and the count of tasks left.
+            // first, a number for done, and commands match in any case. A done
+            // for a real task adds the
+            // answers typed at "Yes or no? ", as [command, text, answers]. The
+            // transcript is worked out on a list kept here. Every answer is
+            // echoed after its prompt, and the case ends with the blank
+            // command and the count of tasks left.
             function todo_case(name, steps) {
                 const tasks = [];
                 const stdin_lines = [];
                 const expected_lines = [];
-                for (const [command, text] of steps) {
+                for (const [command, text, answers = []] of steps) {
                     assert(command !== "", `todo_case "${name}": the blank command is added at the end`);
-                    const asks = COMMANDS_WITH_TEXT.includes(command);
+                    const word = python_lower(command);
+                    const asks = COMMANDS_WITH_TEXT.includes(word);
                     assert(asks === (text !== undefined), `todo_case "${name}": "${command}" text mismatch`);
                     stdin_lines.push(command);
                     expected_lines.push(PROMPT_COMMAND + command);
-                    if (command === "add" || command === "first") {
+                    if (word === "add" || word === "first") {
                         assert(clean_task(text), `todo_case "${name}": task "${text}" must be non-empty and unpadded`);
                         stdin_lines.push(text);
                         expected_lines.push(PROMPT_TASK + text);
-                        if (command === "add") tasks.push(text);
+                        if (word === "add") tasks.push(text);
                         else tasks.unshift(text);
-                    } else if (command === "done") {
-                        stdin_lines.push(text);
+                    } else if (word === "done") {
+                        stdin_lines.push(text, ...answers);
                         expected_lines.push(PROMPT_NUMBER + text);
-                        expected_lines.push(finish_line(tasks, text));
-                    } else if (command === "list") {
+                        expected_lines.push(...finish_lines(name, tasks, text, answers));
+                    } else if (word === "list") {
                         if (tasks.length === 0) expected_lines.push(NOTHING_TO_DO);
                         tasks.forEach((task, index) => expected_lines.push(`${index + 1}. ${task}`));
                     } else {
@@ -110,48 +148,66 @@
 
             const TWELVE_TASKS = Array.from({ length: 12 }, (_, index) => ["add", `Chapter ${index + 1} notes`]);
 
-            // Cases 1-3 are the handout's examples. Case 2's 0 and case 5's 0
+            // Cases 1-4 are the handout's examples. Case 3's 0 and case 6's 0
             // and -1 catch a done that leans on pop() raising IndexError,
-            // since pop(-1) takes the last task instead. Case 4 fills the list
-            // with first only, which catches insert() at the end. Case 6's
-            // spaces catch an isdigit() check in place of int(). Case 7 takes
-            // the last task and then asks for it again. Case 8 catches
-            // commands matched without regard to case. Case 9 has twelve
-            // tasks, which catches a list capped at a fixed size, and case 10
-            // types a blank number. Case 11 types no commands at all.
+            // since pop(-1) takes the last task instead, and the numbers with
+            // no task in cases 3, 4, 6, 8, and 11 catch a confirmation asked
+            // before the number is checked. Case 5 fills the list with first
+            // only, which catches insert() at the end. Case 7's spaces catch an
+            // isdigit() check in place of int(). Case 8 takes the last task
+            // and then asks for it again. Cases 4 and 9 catch commands matched
+            // only in lowercase, and the answers in cases 2, 5, 7, 8, 10, and
+            // 12 catch yes and no matched only in lowercase or only in full.
+            // Case 10 has twelve tasks, which catches a list capped at a fixed
+            // size, and case 11 types a blank number. Case 12 says no to the
+            // last task, then no and yes to the one before it, which catches a
+            // no that still pops or a yes that pops the wrong index, and its
+            // nope and yeah catch an answer checked by its first letter. Case
+            // 13 types no commands at all.
             const CASES = [
                 todo_case("Example 1 — add, first, list, and done", [
                     ["add", "Buy milk"], ["add", "Call mom"], ["first", "Pay rent"], ["list"],
-                    ["done", "2"], ["list"],
+                    ["done", "2", ["yes"]], ["list"],
                 ]),
-                todo_case("Example 2 — task numbers that are not tasks", [
+                todo_case("Example 2 — no keeps the task, and other answers ask again", [
+                    ["add", "Wash car"], ["done", "1", ["maybe", "nope", "N"]], ["list"],
+                ]),
+                todo_case("Example 3 — task numbers that are not tasks", [
                     ["add", "Study for quiz"], ["done", "one"], ["done", "1.5"], ["done", "0"],
-                    ["done", "4"], ["done", "1"], ["list"],
+                    ["done", "4"], ["done", "1", ["yes"]], ["list"],
                 ]),
-                todo_case("Example 3 — an empty list and an unknown command", [
-                    ["list"], ["done", "1"], ["remove"],
+                todo_case("Example 4 — an empty list, a command in capitals, and an unknown command", [
+                    ["list"], ["DONE", "1"], ["remove"],
                 ]),
-                todo_case("Example 4 — each first goes in front of the one before", [
+                todo_case("Example 5 — each first goes in front of the one before", [
                     ["first", "Water plants"], ["first", "Walk dog"], ["first", "Feed cat"], ["list"],
-                    ["done", "1"], ["list"],
+                    ["done", "1", ["YES"]], ["list"],
                 ]),
-                todo_case("Example 5 — 0 and -1 are not tasks", [
+                todo_case("Example 6 — 0 and -1 are not tasks", [
                     ["add", "Laundry"], ["add", "Dishes"], ["add", "Vacuum"], ["done", "-1"],
                     ["done", "0"], ["list"],
                 ]),
-                todo_case("Example 6 — spaces around the number", [
-                    ["add", "Read chapter 7"], ["add", "Email Prof. Lee"], ["done", " 2 "], ["list"],
+                todo_case("Example 7 — spaces around the number", [
+                    ["add", "Read chapter 7"], ["add", "Email Prof. Lee"], ["done", " 2 ", ["y"]], ["list"],
                 ]),
-                todo_case("Example 7 — the last task, then the same number again", [
-                    ["add", "Pack"], ["add", "Drive"], ["add", "Unpack"], ["done", "3"], ["done", "3"],
+                todo_case("Example 8 — the last task, then the same number again", [
+                    ["add", "Pack"], ["add", "Drive"], ["add", "Unpack"], ["done", "3", ["Yes"]], ["done", "3"],
                     ["list"],
                 ]),
-                todo_case("Example 8 — commands are lowercase", [["add", "Shop"], ["Add"], ["LIST"], ["list"]]),
-                todo_case("Example 9 — twelve tasks", [...TWELVE_TASKS, ["done", "12"], ["done", "1"], ["list"]]),
-                todo_case("Example 10 — a blank number and a word", [
+                todo_case("Example 9 — commands in any case", [
+                    ["ADD", "Shop"], ["First", "Cook"], ["LIST"], ["Done", "2", ["yes"]], ["list"], ["Help"],
+                ]),
+                todo_case("Example 10 — twelve tasks", [
+                    ...TWELVE_TASKS, ["done", "12", ["Y"]], ["done", "1", ["yES"]], ["list"],
+                ]),
+                todo_case("Example 11 — a blank number and a word", [
                     ["add", "Nap"], ["done", ""], ["done", "first"], ["list"],
                 ]),
-                todo_case("Example 11 — no commands at all", []),
+                todo_case("Example 12 — no twice, then yes to a different task", [
+                    ["add", "Rake leaves"], ["add", "Clean gutters"], ["add", "Mow lawn"],
+                    ["done", "3", ["nope", "nO"]], ["done", "2", ["yeah", "n"]], ["done", "2", ["yeah", "Y"]], ["list"],
+                ]),
+                todo_case("Example 13 — no commands at all", []),
             ];
 
             // Both quote styles, and with or without the trailing space, so a
@@ -326,6 +382,32 @@
                 return passing_line(context, popped.line_number);
             }
 
+            // done asks before it takes the task off, so yes_or_no() is called
+            // in finish_task() on a line above its pop(). Popping first and
+            // putting the task back on a no prints the same transcript, which
+            // is why this is a row.
+            const YES_OR_NO_CALL = /\byes_or_no\s*\(/;
+            function confirm_check(context) {
+                if (function_body(code_only(context.source), "yes_or_no") === null) return no_function("yes_or_no()");
+                const found = function_body(code_and_fields(context.source), "finish_task");
+                if (found === null) return no_function(FINISH_SIGNATURE);
+                const asked = found.body.find((line) => YES_OR_NO_CALL.test(line.text));
+                if (asked === undefined) {
+                    return failing_line(
+                        context, found.line_number, "defines finish_task() without calling yes_or_no() inside it",
+                        "Ask yes_or_no() before taking the task off, and pop() only on True.",
+                    );
+                }
+                const popped = found.body.find((line) => POP_CALL.test(line.text));
+                if (popped !== undefined && popped.line_number < asked.line_number) {
+                    return failing_line(
+                        context, popped.line_number, "pops before yes_or_no() is asked",
+                        "Look the task up by its index to name it, and pop() only after the answer is yes.",
+                    );
+                }
+                return passing_line(context, asked.line_number);
+            }
+
             // finish_task() works on the caller's list, which is copy by
             // reference from the changing-lists slides. Three things break
             // that: returning a list (or anything but None), rebinding the
@@ -423,12 +505,13 @@
                         name: "Input handling",
                         points: 10,
                         description:
-                            "Source calls input() with each of the three exact prompts from the handout.",
+                            "Source calls input() with each of the four exact prompts from the handout.",
                         type: "code",
                         needles: [
                             prompt_needles(PROMPT_COMMAND),
                             prompt_needles(PROMPT_TASK),
                             prompt_needles(PROMPT_NUMBER),
+                            prompt_needles(PROMPT_YES_NO),
                         ],
                         mode: "all",
                     },
@@ -461,10 +544,19 @@
                     {
                         id: "pop",
                         name: "Removes with pop()",
-                        points: 10,
+                        points: 5,
                         description: "finish_task() takes the task off the list with pop().",
                         type: "custom",
                         check: pop_check,
+                    },
+                    {
+                        id: "confirm",
+                        name: "Confirms with yes_or_no() before pop()",
+                        points: 5,
+                        description:
+                            "finish_task() calls yes_or_no() to confirm the task before the line that pops it.",
+                        type: "custom",
+                        check: confirm_check,
                     },
                     {
                         id: "in-place",

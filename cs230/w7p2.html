@@ -326,15 +326,53 @@
                 return { earned, detail: `In print_report(), ${missing.join(", and ")}.` };
             }
 
-            // Half the row for each exception the handout names. A bare
-            // except, or one naming Exception, also swallows the NameError
-            // from a typo, which the Find the Bug slide shows, so one
-            // anywhere in the program zeroes the row.
+            // Half the row for each exception, caught where the handout puts
+            // it, which is what the question under Processing asks about.
+            // int() fails in parse_line() and open() in print_report(), and
+            // neither has a try around that line: the ValueError is caught in
+            // print_report() and the FileNotFoundError in main(). Catching
+            // either one where it is raised prints the same transcript, which
+            // is why this is a row. A bare except, or one naming Exception,
+            // also swallows the NameError from a typo, which the Find the Bug
+            // slide shows, so one anywhere in the program zeroes the row.
             const EXCEPT_BARE = /^[ \t]*except\s*:/;
-            const EXCEPT_BROAD = /^[ \t]*except\s*\(?\s*(?:Base)?Exception\b/;
-            const NAMED_EXCEPTIONS = ["ValueError", "FileNotFoundError"];
+            const EXCEPT_BROAD = /^[ \t]*except\b[^:]*\b(?:Base)?Exception\b/;
+            const TRY_STATEMENT = /^[ \t]*try\s*:/;
+            function except_line(body, exception) {
+                const named = new RegExp(`^[ \\t]*except\\b[^:]*\\b${exception}\\b`);
+                return body.find((line) => named.test(line.text));
+            }
+
+            // What keeps one half of the row, or null when it earns its 5.
+            function value_error_problem(parse, report) {
+                if (parse === null) return "No parse_line() found";
+                const tried = parse.body.find((line) => TRY_STATEMENT.test(line.text));
+                if (tried !== undefined) {
+                    return `parse_line() has a try on line ${tried.line_number} (let the ValueError from int() go up to print_report())`;
+                }
+                if (report === null) return "No print_report() found";
+                if (except_line(report.body, "ValueError") === undefined) {
+                    return "No except ValueError in print_report() (call parse_line() inside a try there)";
+                }
+                return null;
+            }
+
+            function file_error_problem(report, main) {
+                if (report === null) return "No print_report() found";
+                const caught = except_line(report.body, "FileNotFoundError");
+                if (caught !== undefined) {
+                    return `print_report() catches FileNotFoundError on line ${caught.line_number} (let it go up to main())`;
+                }
+                if (main === null) return "No main() found";
+                if (except_line(main.body, "FileNotFoundError") === undefined) {
+                    return "No except FileNotFoundError in main() (call print_report() inside a try there)";
+                }
+                return null;
+            }
+
             function exceptions_check(context) {
-                const lines = code_only(context.source).split("\n");
+                const source = code_only(context.source);
+                const lines = source.split("\n");
                 const broad = lines.findIndex((line) => EXCEPT_BARE.test(line) || EXCEPT_BROAD.test(line));
                 if (broad !== -1) {
                     return failing_line(
@@ -342,13 +380,17 @@
                         "Name the ones you expect: except ValueError: and except FileNotFoundError:.",
                     );
                 }
-                const missing = NAMED_EXCEPTIONS.filter((exception) => {
-                    const named = new RegExp(`^[ \\t]*except\\b[^:]*\\b${exception}\\b`);
-                    return !lines.some((line) => named.test(line));
-                });
-                const earned = (10 * (NAMED_EXCEPTIONS.length - missing.length)) / NAMED_EXCEPTIONS.length;
-                if (missing.length === 0) return { earned, detail: "Both are named." };
-                return { earned, detail: `No except ${missing.join(" or except ")} found.` };
+                const parse = function_body(source, "parse_line");
+                const report = function_body(source, "print_report");
+                const main = function_body(source, "main");
+                const problems = [value_error_problem(parse, report), file_error_problem(report, main)].filter(
+                    (problem) => problem !== null,
+                );
+                const earned = 5 * (2 - problems.length);
+                if (problems.length === 0) {
+                    return { earned, detail: "print_report() catches the ValueError, and main() catches the FileNotFoundError." };
+                }
+                return { earned, detail: problems.map((problem) => `${problem}.`).join(" ") };
             }
 
             // main() holds the program's work, and the program ends with the
@@ -453,10 +495,10 @@
                     },
                     {
                         id: "exceptions",
-                        name: "Names the exceptions it catches",
+                        name: "Catches each exception in the right function",
                         points: 10,
                         description:
-                            "5 points each for except ValueError and except FileNotFoundError; a bare except scores zero.",
+                            "5 points for except ValueError in print_report() with no try in parse_line(), and 5 for except FileNotFoundError in main() and not print_report(); a bare except scores zero.",
                         type: "custom",
                         check: exceptions_check,
                     },
