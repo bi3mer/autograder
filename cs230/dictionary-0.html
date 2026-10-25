@@ -1,0 +1,470 @@
+<!doctype html>
+<html lang="en">
+    <head>
+        <meta charset="UTF-8" />
+        <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+        <title>Coffee Cart Autograder</title>
+        <link rel="stylesheet" href="../css/a1.css" />
+        <script src="https://cdn.jsdelivr.net/pyodide/v0.26.2/full/pyodide.js"></script>
+    </head>
+    <body>
+        <div class="split">
+            <section class="sheet">
+                <!-- The whole problem statement, fetched from dictionary-0.md
+                     and rendered by src/markdown.js. The file is the handout,
+                     readable on its own. -->
+                <div class="prose" id="handout"></div>
+            </section>
+
+            <section id="grader"></section>
+        </div>
+        <footer>bi3mer · Runs Python via Pyodide</footer>
+
+        <script type="module">
+            import { grader_app } from "../src/main.js";
+            import { assert } from "../src/assert.js";
+
+            // The prompt and the fixed lines drive the transcript each case
+            // expects, so the wording is written once here. The handout
+            // quotes them again in dictionary-0.md, which is the one place
+            // they can drift.
+            const PROMPT = "Order: ";
+            const NOT_ON_MENU = "Not on the menu: ";
+            const NO_ORDERS = "No orders.";
+
+            // The starter's menu, in the starter's order. A Map keeps keys in
+            // the order they were added, as a Python dictionary does. Every
+            // price is a multiple of 0.25, so every cost and total is exact in
+            // a double, in either language.
+            const MENU = new Map([
+                ["coffee", 3.0],
+                ["latte", 4.5],
+                ["tea", 2.5],
+                ["bagel", 2.75],
+                ["muffin", 3.25],
+            ]);
+
+            // f"{value:.2f}" for a cost the case builder has already worked
+            // out. JS's toFixed rounds an exact tie up and Python rounds it to
+            // even; the assert keeps every case off that edge, as in w7p2.
+            function two_decimals(value) {
+                const half_cent = Number.isInteger(value * 200) && !Number.isInteger(value * 100);
+                assert(!half_cent, `two_decimals: ${value} rounds differently in Python`);
+                return value.toFixed(2);
+            }
+
+            // What strip().lower() makes of an order. Orders are printable
+            // ASCII, where Python's strip() and lower() agree with JS's trim()
+            // and toLowerCase().
+            const PRINTABLE = /^[\x20-\x7e]*$/;
+            function cleaned(order) {
+                assert(PRINTABLE.test(order), `cleaned: "${order}" must be printable ASCII`);
+                return order.trim().toLowerCase();
+            }
+
+            // The receipt for the counts, worked out the way the handout
+            // describes: one line per item in the order it was first ordered,
+            // then the best seller, where only a larger count takes the lead,
+            // and the total.
+            function receipt_lines(counts) {
+                if (counts.size === 0) return [NO_ORDERS];
+                const lines = [];
+                let total = 0;
+                let best = null;
+                for (const [item, count] of counts) {
+                    const cost = MENU.get(item) * count;
+                    lines.push(`${item} x${count}: $${two_decimals(cost)}`);
+                    total += cost;
+                    if (best === null || count > counts.get(best)) best = item;
+                }
+                lines.push(`Best seller: ${best} (${counts.get(best)})`);
+                lines.push(`Total: $${two_decimals(total)}`);
+                return lines;
+            }
+
+            // A case is the orders typed, in order, then the blank order that
+            // ends them, which is "" unless the case types spaces instead.
+            // Every answer is echoed after its prompt.
+            function order_case(name, orders, ending = "") {
+                assert(cleaned(ending) === "", `order_case "${name}": the ending order must clean to blank`);
+                const counts = new Map();
+                const expected_lines = [];
+                for (const order of orders) {
+                    const item = cleaned(order);
+                    assert(item !== "", `order_case "${name}": only the ending order is blank`);
+                    expected_lines.push(PROMPT + order);
+                    if (!MENU.has(item)) expected_lines.push(NOT_ON_MENU + item);
+                    else counts.set(item, (counts.get(item) ?? 0) + 1);
+                }
+                expected_lines.push(PROMPT + ending, ...receipt_lines(counts));
+                return { name, stdin_lines: [...orders, ending], expected_lines };
+            }
+
+            const TWELVE_COFFEES = Array.from({ length: 12 }, () => "coffee");
+
+            // Cases 1-3 are the handout's examples. Case 1's Coffee and
+            // " LATTE" catch a missing strip() or lower(), and case 2's tie
+            // catches >= in place of >. Case 4 is a blank first order, and
+            // case 5 ends on spaces, which strip() turns blank. Case 6 orders
+            // every item once, so the first is the best seller, and case 7's
+            // unknown order prints cleaned. Case 8's tea leads until coffee
+            // passes it, with a count past 9 and a cost past $10.
+            const CASES = [
+                order_case("Example 1 — mixed case, spaces, and an unknown order", [
+                    "latte", "Coffee", " LATTE", "hot chocolate", "bagel", "latte",
+                ]),
+                order_case("Example 2 — a tie goes to the item ordered first", ["tea", "muffin", "muffin", "tea"]),
+                order_case("Example 3 — nothing on the menu", ["soup"]),
+                order_case("Example 4 — a blank first order", []),
+                order_case("Example 5 — an order of only spaces ends the orders", ["coffee", "tea", "tea"], "   "),
+                order_case("Example 6 — one of every item", ["muffin", "bagel", "tea", "latte", "coffee"]),
+                order_case("Example 7 — an unknown order in mixed case", [" Hot Cocoa ", "Tea", "COFFEE", "coffee"]),
+                order_case("Example 8 — a dozen coffees", ["tea", "tea", "tea", ...TWELVE_COFFEES, "bagel"]),
+            ];
+
+            // Both quote styles, and with or without the trailing space, so a
+            // student is graded on the prompt's wording rather than on which
+            // quote character they reached for.
+            function prompt_needles(prompt) {
+                const trimmed = prompt.trimEnd();
+                return [
+                    `input("${prompt}")`,
+                    `input('${prompt}')`,
+                    `input("${trimmed}")`,
+                    `input('${trimmed}')`,
+                ];
+            }
+
+            // Strings and comments are blanked before scanning, as in w6p1,
+            // so the summary pasted in as a docstring cannot read as code.
+            // Blanking keeps every newline, so line numbers still match.
+            const TRIPLE_QUOTED = /"""[\s\S]*?"""|'''[\s\S]*?'''/g;
+            const SINGLE_QUOTED = /"(?:[^"\\\n]|\\.)*"|'(?:[^'\\\n]|\\.)*'/g;
+            const COMMENT = /#[^\n]*/g;
+            function code_only(source) {
+                return source
+                    .replace(TRIPLE_QUOTED, (text) => text.replace(/[^\n]/g, ""))
+                    .replace(SINGLE_QUOTED, '""')
+                    .replace(COMMENT, "");
+            }
+
+            // code_only() blanks an f-string's fields too, which hides a call
+            // made inside one, as in f"{read_orders(menu)}". This keeps the
+            // expressions inside an f-string's braces and blanks the rest,
+            // for the checks that look for a call. Each string stays on its
+            // own line, so line numbers still match.
+            const PREFIXED_STRING = /(\b[rRbBuUfF]{1,2})?("(?:[^"\\\n]|\\.)*"|'(?:[^'\\\n]|\\.)*')/g;
+            const FSTRING_FIELD = /\{([^{}]*)\}/g;
+            function code_and_fields(source) {
+                return source
+                    .replace(TRIPLE_QUOTED, (text) => text.replace(/[^\n]/g, ""))
+                    .replace(PREFIXED_STRING, (text, prefix) => {
+                        if (prefix === undefined || !/f/i.test(prefix)) return '""';
+                        const fields = [...text.matchAll(FSTRING_FIELD)].map((field) => field[1]);
+                        return `"" ${fields.join(" ")} ""`;
+                    })
+                    .replace(COMMENT, "");
+            }
+
+            function quote_line(context, line_number) {
+                return context.source.split("\n")[line_number - 1].trim();
+            }
+
+            function failing_line(context, line_number, reason, advice) {
+                return {
+                    pass: false,
+                    detail:
+                        `Line ${line_number} ${reason} ("${quote_line(context, line_number)}"). ` +
+                        advice,
+                };
+            }
+
+            function passing_line(context, line_number) {
+                return {
+                    pass: true,
+                    detail: `Line ${line_number}: "${quote_line(context, line_number)}".`,
+                };
+            }
+
+            // The def of `name` and its body, as `{ line_number, body }`, or
+            // null when the source defines no such function. The body is
+            // every line after the def that is blank or indented past it, up
+            // to the first line that is not, which is where Python ends the
+            // block.
+            const LEADING_SPACE = /^[ \t]*/;
+            function function_body(source, name) {
+                const def = new RegExp(`^([ \\t]*)def\\s+${name}\\s*\\(`);
+                const lines = source.split("\n");
+                for (let index = 0; index < lines.length; index++) {
+                    const match = lines[index].match(def);
+                    if (match === null) continue;
+                    const def_indent = match[1].length;
+                    const body = [];
+                    for (let next = index + 1; next < lines.length; next++) {
+                        const text = lines[next];
+                        const indent = text.match(LEADING_SPACE)[0].length;
+                        if (text.trim() !== "" && indent <= def_indent) break;
+                        body.push({ line_number: next + 1, text });
+                    }
+                    return { line_number: index + 1, body };
+                }
+                return null;
+            }
+
+            function no_function(signature) {
+                return {
+                    pass: false,
+                    detail: `No ${signature.split("(")[0]}() function found. Define it with def ${signature}:.`,
+                };
+            }
+
+            // Each function the handout names besides main() is half this
+            // row: defined, called somewhere besides its own def, and doing
+            // its one job. read_orders() hands the counts back with return,
+            // and print_receipt() prints them. One long main() prints the
+            // same transcript, which is why this is a row.
+            const PRINT_CALL = /\bprint\s*\(/;
+            const RETURN_VALUE = /^[ \t]*return\s+\S/;
+            const FUNCTIONS = [
+                { signature: "read_orders(menu)", job: "returns" },
+                { signature: "print_receipt(menu, counts)", job: "prints" },
+            ];
+            function function_problem(source, calls_source, { signature, job }) {
+                const name = signature.split("(")[0];
+                const found = function_body(source, name);
+                if (found === null) return `No ${name}() found (define it with def ${signature}:)`;
+                if (job === "returns" && !found.body.some((line) => RETURN_VALUE.test(line.text))) {
+                    return `${name}() never returns a value`;
+                }
+                if (job === "prints" && !found.body.some((line) => PRINT_CALL.test(line.text))) {
+                    return `${name}() never calls print()`;
+                }
+                const call = new RegExp(`\\b${name}\\s*\\(`);
+                const called = calls_source
+                    .split("\n")
+                    .some((line, index) => index !== found.line_number - 1 && call.test(line));
+                if (!called) return `${name}() is defined but never called`;
+                return null;
+            }
+
+            function functions_check(context) {
+                const source = code_only(context.source);
+                const calls_source = code_and_fields(context.source);
+                const problems = FUNCTIONS.map((spec) => function_problem(source, calls_source, spec)).filter(
+                    (problem) => problem !== null,
+                );
+                const earned = (10 * (FUNCTIONS.length - problems.length)) / FUNCTIONS.length;
+                if (problems.length === 0) {
+                    return { earned, detail: "read_orders() returns the counts, and print_receipt() prints them." };
+                }
+                return { earned, detail: problems.map((problem) => `${problem}.`).join(" ") };
+            }
+
+            // The counting pattern from the Counting with a Dictionary slide:
+            // an if checks whether the item is already a key, a new item
+            // starts at 1, and an item seen before goes up by 1. The
+            // dictionary is whichever name read_orders() starts at {}. The
+            // check is 4 points and each assignment 3, and writing the add
+            // out as counts[item] = counts[item] + 1 counts as += 1.
+            const EMPTY_DICT = /^[ \t]*([A-Za-z_]\w*)\s*=\s*(?:\{\s*\}|dict\s*\(\s*\))\s*$/;
+            function new_key_check(context) {
+                const found = function_body(code_only(context.source), "read_orders");
+                if (found === null) return no_function("read_orders(menu)");
+                const started = found.body.map((line) => line.text.match(EMPTY_DICT)).find((match) => match != null);
+                if (started === undefined) {
+                    return failing_line(
+                        context, found.line_number, "defines read_orders() without starting a dictionary at {}",
+                        "Start the counts empty, then count each order into them.",
+                    );
+                }
+                const counts = started[1];
+                const key = `\\b${counts}\\s*\\[[^\\]]*\\]`;
+                const pieces = [
+                    {
+                        points: 4,
+                        pattern: new RegExp(`^[ \\t]*(?:if|elif)\\b.*\\bin\\s+${counts}\\b`),
+                        missing: `no if checks whether the item is in ${counts}`,
+                    },
+                    {
+                        points: 3,
+                        pattern: new RegExp(`${key}\\s*=\\s*1\\s*$`),
+                        missing: `no new item starts at ${counts}[...] = 1`,
+                    },
+                    {
+                        points: 3,
+                        pattern: new RegExp(`${key}\\s*(?:\\+=\\s*1|=\\s*${key}\\s*\\+\\s*1)\\s*$`),
+                        missing: `no item seen before goes up with ${counts}[...] += 1`,
+                    },
+                ];
+                const missing = pieces.filter((piece) => !found.body.some((line) => piece.pattern.test(line.text)));
+                const earned = 10 - missing.reduce((lost, piece) => lost + piece.points, 0);
+                if (missing.length === 0) return { earned, detail: `Counts into ${counts}, starting each new item at 1.` };
+                return {
+                    earned,
+                    detail: `In read_orders(), ${missing.map((piece) => piece.missing).join(", and ")}.`,
+                };
+            }
+
+            // The receipt walks the counts with items(), which hands over each
+            // item with its count, as on the Best Day (us) slide. Looking each
+            // count up by key prints the same transcript, which is why this
+            // is a row.
+            const ITEMS_LOOP = /^[ \t]*for\b.*\.\s*items\s*\(\s*\)\s*:/;
+            function items_check(context) {
+                const found = function_body(code_and_fields(context.source), "print_receipt");
+                if (found === null) return no_function("print_receipt(menu, counts)");
+                const looped = found.body.find((line) => ITEMS_LOOP.test(line.text));
+                if (looped === undefined) {
+                    return failing_line(
+                        context, found.line_number, "defines print_receipt() without a for loop over items()",
+                        "Loop over the counts with items(), which gives each item and its count together.",
+                    );
+                }
+                return passing_line(context, looped.line_number);
+            }
+
+            // main() holds the program's work, and the program ends with the
+            // __main__ check calling it. That check compares strings, so it is
+            // matched with strings kept and only docstrings and comments
+            // blanked; the summary pasted at the top is a docstring, so its
+            // row name cannot pass the row. Any other line at the left margin,
+            // besides a def or an import, is code running outside a function,
+            // and that includes a menu moved out of main().
+            const MAIN_GUARD = /^if\s+(?:__name__\s*==\s*(["'])__main__\1|(["'])__main__\2\s*==\s*__name__)\s*:\s*$/;
+            const MAIN_CALL = /^[ \t]+main\s*\(\s*\)\s*$/;
+            const TOP_LEVEL_ALLOWED = /^(?:def|import|from)\s/;
+            const INDENTED = /^[ \t]/;
+            function main_check(context) {
+                const blanked = code_only(context.source).split("\n");
+                if (function_body(blanked.join("\n"), "main") === null) return no_function("main()");
+                const kept = context.source
+                    .replace(TRIPLE_QUOTED, (text) => text.replace(/[^\n]/g, ""))
+                    .replace(COMMENT, "")
+                    .split("\n");
+                const guard = kept.findIndex((line) => MAIN_GUARD.test(line));
+                for (let index = 0; index < blanked.length; index++) {
+                    const line = blanked[index];
+                    if (line.trim() === "" || INDENTED.test(line)) continue;
+                    if (index === guard || TOP_LEVEL_ALLOWED.test(line)) continue;
+                    return failing_line(
+                        context, index + 1, "runs outside any function",
+                        "Move it into main(), and end the program with the last two lines of the starter code.",
+                    );
+                }
+                if (guard === -1) {
+                    return {
+                        pass: false,
+                        detail: 'No if __name__ == "__main__": line found. End the program with the last two lines of the starter code.',
+                    };
+                }
+                const call = kept.slice(guard + 1).find((line) => line.trim() !== "");
+                if (call === undefined || !MAIN_CALL.test(call)) {
+                    return failing_line(
+                        context, guard + 1, "is not followed by a call to main()",
+                        "Put main() on the line under it, indented.",
+                    );
+                }
+                return passing_line(context, guard + 1);
+            }
+
+            // .count() on a list of orders is the Vote Counter's approach,
+            // which the dictionary replaces, so a call anywhere zeroes the
+            // submission. The gate scans the blanked source, so the gate's
+            // own name pasted into the docstring cannot trip it.
+            const COUNT_CALL = /\.\s*count\s*\(/;
+            function counts_with_dictionary_check(source) {
+                const lines = code_only(source).split("\n");
+                const index = lines.findIndex((line) => COUNT_CALL.test(line));
+                if (index === -1) return { pass: true, detail: "" };
+                return failing_line(
+                    { source }, index + 1, "calls .count()",
+                    "Count each order in a dictionary as it comes in. Calling .count() scores zero.",
+                );
+            }
+
+            // The custom rows scan the blanked source, so a row's name pasted
+            // back as a docstring line cannot trip its own check, and no name
+            // matches its own row's pattern anyway. The input row scans the
+            // raw source, and no row name contains the prompt.
+            function build_criteria(results) {
+                return [
+                    {
+                        id: "input",
+                        name: "Input handling",
+                        points: 5,
+                        description: "Source calls input() with the exact prompt text from the handout.",
+                        type: "code",
+                        needles: [prompt_needles(PROMPT)],
+                        mode: "all",
+                    },
+                    {
+                        id: "output",
+                        name: "Correct output",
+                        points: 40,
+                        description:
+                            "40 points split evenly across all examples, prorated by the % of lines that match exactly.",
+                        type: "output-diff",
+                        cases: CASES,
+                    },
+                    {
+                        id: "functions",
+                        name: "Functions",
+                        points: 10,
+                        description:
+                            "5 points each: read_orders() is called and returns the counts, and print_receipt() is called and prints them.",
+                        type: "custom",
+                        check: functions_check,
+                    },
+                    {
+                        id: "new-key",
+                        name: "Starts a new key at 1",
+                        points: 10,
+                        description:
+                            "In read_orders(), 4 points for an if that checks whether the item is a key, 3 for setting a new item to 1, and 3 for adding 1 to an item seen before.",
+                        type: "custom",
+                        check: new_key_check,
+                    },
+                    {
+                        id: "items",
+                        name: "Loops with items()",
+                        points: 10,
+                        description: "print_receipt() goes through the counts with a for loop over items().",
+                        type: "custom",
+                        check: items_check,
+                    },
+                    {
+                        id: "main",
+                        name: "Runs from main()",
+                        points: 5,
+                        description:
+                            'Every line runs inside a function, and the program ends with if __name__ == "__main__": calling main().',
+                        type: "custom",
+                        check: main_check,
+                    },
+                ];
+            }
+
+            // The right column only: dictionary-0.md fills the left, and the
+            // page carries its own footer below both.
+            grader_app.init({
+                filename: "dictionary-0.py",
+                editor: true,
+                title: "Submission",
+                subtitle: "Graded in this tab · nothing leaves your browser",
+                cases: CASES,
+                build_criteria,
+                max_auto_points: 80,
+                mount: "#grader",
+                handout: "dictionary-0.md",
+                gates: [
+                    {
+                        name: "Counts with a dictionary",
+                        description:
+                            "Gate: calling .count() anywhere forces a total score of zero, the same as a syntax error.",
+                        check: counts_with_dictionary_check,
+                    },
+                ],
+            });
+        </script>
+    </body>
+</html>

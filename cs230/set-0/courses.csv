@@ -1,0 +1,8 @@
+course,credits,prerequisites
+CS 101,4
+CS 102,4,CS 101
+CS 201,4,CS 102,MATH 101
+CS 210,3,CS 102
+MATH 101,4
+MATH 102,4,MATH 101
+ART 100,3

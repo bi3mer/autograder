@@ -51,7 +51,8 @@ import {
  *   per example, run in order. `randint_values` is optional: the numbers
  *   `random.randint` returns, call by call, for a program that picks one.
  *   `files` is optional too: `{ "name.txt": "contents" }`, written into the
- *   run's working directory so the program can `open()` them.
+ *   run's working directory so the program can `open()` them. A name may
+ *   sit in folders, as `notes/a.txt` does, and the folders are made for it.
  *   `cases[0]` also drives the syntax-error probe that gates the whole run.
  * - `build_criteria(results)`: returns the rubric `rubric.grade` scores.
  * - `max_auto_points`: the denominator shown beside the total.

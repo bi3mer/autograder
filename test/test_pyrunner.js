@@ -225,12 +225,37 @@ test("run writes the case's files into a directory of its own and removes it", a
   assert.ok(interpreter.python.at(-1).includes(JSON.stringify(JSON.stringify([]))));
 });
 
-test("run refuses files with a path, non-string contents, or the wrong shape", async () => {
+test("run writes a case file inside folders, making the folders first", async () => {
+  const { py_runner, interpreter } = await ready_runner(canned({ out: "", err: "", prompts: [] }));
+  await py_runner.run("print(1)", [], { files: { "notes/old/a.txt": "x\n" } });
+  const driver = interpreter.python.at(-1);
+  assert.ok(driver.includes(JSON.stringify(JSON.stringify([["notes/old/a.txt", "x\n"]]))));
+  assert.ok(driver.includes("os.makedirs(os.path.dirname(_file_name), exist_ok=True)"));
+});
+
+test("run refuses files whose path could leave the run's directory", async () => {
   const { py_runner } = await ready_runner(canned({ out: "", err: "", prompts: [] }));
+  const refused = [
+    ["../escape.txt", /must not climb or skip a folder/],
+    ["notes/../../a.txt", /must not climb or skip a folder/],
+    ["./a.txt", /must not climb or skip a folder/],
+    ["a//b.txt", /must not climb or skip a folder/],
+    ["notes/", /must not climb or skip a folder/],
+    ["/a.txt", /must be relative/],
+    ["a\\b.txt", /must use \/ between folders/],
+    ["", /must not be empty/],
+  ];
+  for (const [file_name, message] of refused) {
+    await assert.rejects(() => py_runner.run("x", [], { files: { [file_name]: "" } }), message, file_name);
+  }
   await assert.rejects(
-    () => py_runner.run("x", [], { files: { "../escape.txt": "" } }),
-    /filename must not contain a path/,
+    () => py_runner.run("x", [], { files: { "notes": "", "notes/a.txt": "" } }),
+    /"notes" is both a file and a folder/,
   );
+});
+
+test("run refuses files with non-string contents or the wrong shape", async () => {
+  const { py_runner } = await ready_runner(canned({ out: "", err: "", prompts: [] }));
   await assert.rejects(
     () => py_runner.run("x", [], { files: { "a.txt": 3 } }),
     /files\["a.txt"\]/,

@@ -1,0 +1,530 @@
+<!doctype html>
+<html lang="en">
+    <head>
+        <meta charset="UTF-8" />
+        <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+        <title>Course Planner Autograder</title>
+        <link rel="stylesheet" href="../css/a1.css" />
+        <script src="https://cdn.jsdelivr.net/pyodide/v0.26.2/full/pyodide.js"></script>
+    </head>
+    <body>
+        <div class="split">
+            <section class="sheet">
+                <!-- The whole problem statement, fetched from set-0.md and
+                     rendered by src/markdown.js. The file is the handout,
+                     readable on its own. -->
+                <div class="prose" id="handout"></div>
+            </section>
+
+            <section id="grader"></section>
+        </div>
+        <footer>bi3mer · Runs Python via Pyodide</footer>
+
+        <script type="module">
+            import { grader_app } from "../src/main.js";
+            import { assert } from "../src/assert.js";
+
+            // The prompts drive both the input() needles the rubric looks for
+            // and the transcript each case expects, so the wording is written
+            // once here. The handout quotes them again in set-0.md, which is
+            // the one place the two can drift.
+            const PROMPT_FILE = "File name: ";
+            const PROMPT_TAKEN = "Courses taken: ";
+            const READY_CREDITS = "Ready credits: ";
+
+            // The catalogs live in set-0/ beside this page, where the handout
+            // links courses.csv for download. Each case fetches its file from
+            // there, so the copy a student saves and the copy the grader opens
+            // are the same bytes.
+            const FILES_DIR = "set-0/";
+
+            // Files and typed courses are printable ASCII, where Python's
+            // upper(), strip(), and sorted() agree with JS's toUpperCase(),
+            // trim(), and sort().
+            const PRINTABLE = /^[\x20-\x7e]*$/;
+            const PRINTABLE_LINES = /^[\x20-\x7e\n]*$/;
+
+            // How print() shows a list of strings. Python's repr switches to
+            // double quotes for a string holding a single quote, and escapes a
+            // backslash, so no course may hold either.
+            function python_list(items) {
+                for (const item of items) {
+                    assert(!item.includes("'") && !item.includes("\\"), `python_list: "${item}" would print escaped`);
+                }
+                return `[${items.map((item) => `'${item}'`).join(", ")}]`;
+            }
+
+            // The catalog in file order, each course as { course, credits,
+            // needs }, read the way the handout describes: the header
+            // skipped, then a course, its credits, and its prerequisites per
+            // line. A file that ends with a newline has no line after it, so
+            // that last empty piece of the split goes.
+            function read_catalog(text) {
+                assert(PRINTABLE_LINES.test(text), "read_catalog: files must be printable ASCII");
+                const lines = text.split("\n");
+                if (lines.at(-1) === "") lines.pop();
+                return lines.slice(1).map((line) => {
+                    const fields = line.trim().split(",");
+                    assert(fields.length >= 2 && /^\d+$/.test(fields[1]), `read_catalog: "${line}" has no credits`);
+                    return { course: fields[0], credits: Number(fields[1]), needs: new Set(fields.slice(2)) };
+                });
+            }
+
+            // What the program prints after the prompts: each course not
+            // taken, in file order, as ready or with its missing
+            // prerequisites sorted, then the ready courses' credits. The
+            // typed courses become a set the way the handout's main() makes
+            // one, upper-cased and split on commas.
+            function plan_lines(text, typed) {
+                assert(PRINTABLE.test(typed), `plan_lines: "${typed}" must be printable ASCII`);
+                const taken = new Set(typed.toUpperCase().split(","));
+                const printed = [];
+                let ready = 0;
+                for (const { course, credits, needs } of read_catalog(text)) {
+                    if (taken.has(course)) continue;
+                    const missing = [...needs].filter((need) => !taken.has(need)).sort();
+                    if (missing.length === 0) {
+                        printed.push(`${course} (${credits} credits): ready`);
+                        ready += credits;
+                    } else {
+                        printed.push(`${course} (${credits} credits): needs ${python_list(missing)}`);
+                    }
+                }
+                printed.push(READY_CREDITS + ready);
+                return printed;
+            }
+
+            // A case is one file and the courses typed: the file put in the
+            // run's directory, both answers echoed after their prompts, and
+            // then the plan.
+            async function plan_case(name, filename, typed) {
+                const response = await fetch(FILES_DIR + filename);
+                assert(response.ok, `plan_case "${name}": ${filename} answered ${response.status}`);
+                const text = await response.text();
+                return {
+                    name,
+                    stdin_lines: [filename, typed],
+                    files: { [filename]: text },
+                    expected_lines: [PROMPT_FILE + filename, PROMPT_TAKEN + typed, ...plan_lines(text, typed)],
+                };
+            }
+
+            // A name typed with no file behind it. The run's directory holds
+            // nothing, so open() raises FileNotFoundError, and the program
+            // prints its message and exits before asking for courses. The
+            // case supplies no second line, so a program that asks anyway
+            // runs out of input.
+            function missing_case(name, filename) {
+                return {
+                    name,
+                    stdin_lines: [filename],
+                    files: {},
+                    expected_lines: [PROMPT_FILE + filename, `Could not open ${filename}.`],
+                };
+            }
+
+            // Cases 1-3 are the handout's examples. Case 1's "cs 101" catches
+            // a missing upper(), and its CS 201 a missing set taken away from
+            // the prerequisites. Case 3 is a file that does not exist. Case 4
+            // takes every course, so only the credits line prints, and case 5
+            // adds a course the catalog does not have. Case 6's CS 301 lists
+            // three prerequisites out of order, one of them a course the
+            // catalog does not have, so a missing sorted() shows wherever the
+            // set's order is not sorted.
+            const CASES = await Promise.all([
+                plan_case("Example 1 — two courses taken", "courses.csv", "cs 101,MATH 101"),
+                plan_case("Example 2 — nothing taken", "courses.csv", ""),
+                missing_case("Example 3 — a file that does not exist", "missing.csv"),
+                plan_case(
+                    "Example 4 — every course taken", "courses.csv",
+                    "CS 101,CS 102,CS 201,CS 210,MATH 101,MATH 102,ART 100",
+                ),
+                plan_case("Example 5 — a course the catalog does not have", "courses.csv", "CS 999,CS 101"),
+                plan_case("Example 6 — three prerequisites out of order", "advanced.csv", "math 102"),
+            ]);
+
+            // Both quote styles, and with or without the trailing space, so a
+            // student is graded on the prompt's wording rather than on which
+            // quote character they reached for.
+            function prompt_needles(prompt) {
+                const trimmed = prompt.trimEnd();
+                return [
+                    `input("${prompt}")`,
+                    `input('${prompt}')`,
+                    `input("${trimmed}")`,
+                    `input('${trimmed}')`,
+                ];
+            }
+
+            // Strings and comments are blanked before scanning, as in w6p1,
+            // so the summary pasted in as a docstring cannot read as code.
+            // Blanking keeps every newline, so line numbers still match.
+            const TRIPLE_QUOTED = /"""[\s\S]*?"""|'''[\s\S]*?'''/g;
+            const SINGLE_QUOTED = /"(?:[^"\\\n]|\\.)*"|'(?:[^'\\\n]|\\.)*'/g;
+            const COMMENT = /#[^\n]*/g;
+            function code_only(source) {
+                return source
+                    .replace(TRIPLE_QUOTED, (text) => text.replace(/[^\n]/g, ""))
+                    .replace(SINGLE_QUOTED, '""')
+                    .replace(COMMENT, "");
+            }
+
+            // code_only() blanks an f-string's fields too, which hides a call
+            // made inside one, as in f"needs {sorted(missing)}". This keeps
+            // the expressions inside an f-string's braces and blanks the
+            // rest, for the checks that look for a call. Each string stays on
+            // its own line, so line numbers still match.
+            const PREFIXED_STRING = /(\b[rRbBuUfF]{1,2})?("(?:[^"\\\n]|\\.)*"|'(?:[^'\\\n]|\\.)*')/g;
+            const FSTRING_FIELD = /\{([^{}]*)\}/g;
+            function code_and_fields(source) {
+                return source
+                    .replace(TRIPLE_QUOTED, (text) => text.replace(/[^\n]/g, ""))
+                    .replace(PREFIXED_STRING, (text, prefix) => {
+                        if (prefix === undefined || !/f/i.test(prefix)) return '""';
+                        const fields = [...text.matchAll(FSTRING_FIELD)].map((field) => field[1]);
+                        return `"" ${fields.join(" ")} ""`;
+                    })
+                    .replace(COMMENT, "");
+            }
+
+            // Docstrings and comments blanked and every other string kept, for
+            // the checks that need to see what a string holds.
+            function strings_kept(source) {
+                return source.replace(TRIPLE_QUOTED, (text) => text.replace(/[^\n]/g, "")).replace(COMMENT, "");
+            }
+
+            function quote_line(context, line_number) {
+                return context.source.split("\n")[line_number - 1].trim();
+            }
+
+            function failing_line(context, line_number, reason, advice) {
+                return {
+                    pass: false,
+                    detail:
+                        `Line ${line_number} ${reason} ("${quote_line(context, line_number)}"). ` +
+                        advice,
+                };
+            }
+
+            function passing_line(context, line_number) {
+                return {
+                    pass: true,
+                    detail: `Line ${line_number}: "${quote_line(context, line_number)}".`,
+                };
+            }
+
+            // The def of `name` and its body, as `{ line_number, body }`, or
+            // null when the source defines no such function. The body is
+            // every line after the def that is blank or indented past it, up
+            // to the first line that is not, which is where Python ends the
+            // block.
+            const LEADING_SPACE = /^[ \t]*/;
+            function function_body(source, name) {
+                const def = new RegExp(`^([ \\t]*)def\\s+${name}\\s*\\(`);
+                const lines = source.split("\n");
+                for (let index = 0; index < lines.length; index++) {
+                    const match = lines[index].match(def);
+                    if (match === null) continue;
+                    const def_indent = match[1].length;
+                    const body = [];
+                    for (let next = index + 1; next < lines.length; next++) {
+                        const text = lines[next];
+                        const indent = text.match(LEADING_SPACE)[0].length;
+                        if (text.trim() !== "" && indent <= def_indent) break;
+                        body.push({ line_number: next + 1, text });
+                    }
+                    return { line_number: index + 1, body };
+                }
+                return null;
+            }
+
+            function no_function(signature) {
+                return {
+                    pass: false,
+                    detail: `No ${signature.split("(")[0]}() function found. Define it with def ${signature}:.`,
+                };
+            }
+
+            const CATALOG_SIGNATURE = "read_catalog(filename)";
+            const PLAN_SIGNATURE = "print_plan(catalog, taken)";
+
+            // read_catalog() hands the catalog back with return, prints
+            // nothing, and is called somewhere besides its own def. Reading
+            // and printing in one long main() prints the same transcript,
+            // which is why this is a row.
+            const PRINT_CALL = /\bprint\s*\(/;
+            const RETURN_VALUE = /^[ \t]*return\s+\S/;
+            const CATALOG_CALL = /\bread_catalog\s*\(/;
+            function functions_check(context) {
+                const found = function_body(code_only(context.source), "read_catalog");
+                if (found === null) return no_function(CATALOG_SIGNATURE);
+                const printed = found.body.find((line) => PRINT_CALL.test(line.text));
+                if (printed !== undefined) {
+                    return failing_line(
+                        context, printed.line_number, "prints from read_catalog()",
+                        "Return the catalog, and let print_plan() do the printing.",
+                    );
+                }
+                if (!found.body.some((line) => RETURN_VALUE.test(line.text))) {
+                    return failing_line(
+                        context, found.line_number, "defines read_catalog() without returning a value",
+                        "Return the dictionary of records it builds.",
+                    );
+                }
+                const calls = code_and_fields(context.source).split("\n");
+                const called = calls.findIndex((line, index) => index !== found.line_number - 1 && CATALOG_CALL.test(line));
+                if (called === -1) {
+                    return failing_line(
+                        context, found.line_number, "defines read_catalog() but nothing calls it",
+                        "Call it from main() with the file's name.",
+                    );
+                }
+                return passing_line(context, called + 1);
+            }
+
+            // Each course is a record, as on the A Dictionary of Dictionaries
+            // slide, with its prerequisites in a set under "needs". Half the
+            // row for a "needs" key in read_catalog(), and half for a set()
+            // call there. A list of prerequisites with a loop that skips the
+            // ones taken prints the same transcript, which is why this is a
+            // row.
+            const NEEDS_KEY = /["']needs["']/;
+            const SET_CALL = /\bset\s*\(/;
+            function record_check(context) {
+                const kept = function_body(strings_kept(context.source), "read_catalog");
+                const code = function_body(code_and_fields(context.source), "read_catalog");
+                if (kept === null || code === null) return no_function(CATALOG_SIGNATURE);
+                const keyed = kept.body.some((line) => NEEDS_KEY.test(line.text));
+                const made_set = code.body.some((line) => SET_CALL.test(line.text));
+                const earned = (keyed ? 5 : 0) + (made_set ? 5 : 0);
+                const missing = [];
+                if (!keyed) missing.push('no record has a "needs" field');
+                if (!made_set) missing.push("no set() holds the prerequisites");
+                if (missing.length === 0) return { earned, detail: 'Each record keeps its prerequisites in a set under "needs".' };
+                return { earned, detail: `In read_catalog(), ${missing.join(", and ")}.` };
+            }
+
+            // The missing prerequisites are the course's set minus the set
+            // taken, from the Combining Sets slide. a.difference(b), which the
+            // slide lists beside -, counts too. The pattern wants a name, a
+            // subscript, or a call on the left of the minus and a name or a
+            // call on its right, which leaves out x - 1.
+            const SET_MINUS = /[\w\])]\s*-=?\s*[A-Za-z_(]/;
+            const DIFFERENCE_CALL = /\.\s*difference\s*\(/;
+            function difference_check(context) {
+                const found = function_body(code_and_fields(context.source), "print_plan");
+                if (found === null) return no_function(PLAN_SIGNATURE);
+                const taken_away = found.body.find(
+                    (line) => SET_MINUS.test(line.text) || DIFFERENCE_CALL.test(line.text),
+                );
+                if (taken_away === undefined) {
+                    return failing_line(
+                        context, found.line_number, "defines print_plan() without taking one set from another",
+                        "Find what a course still needs by taking the set taken away from its prerequisites.",
+                    );
+                }
+                return passing_line(context, taken_away.line_number);
+            }
+
+            // A set has no order, and Pyodide may fix the hash seed, which
+            // would print an unsorted set the same way on every run, so the
+            // output rows cannot always catch a missing sorted().
+            const SORTED_CALL = /\bsorted\s*\(/;
+            function sorted_check(context) {
+                const found = function_body(code_and_fields(context.source), "print_plan");
+                if (found === null) return no_function(PLAN_SIGNATURE);
+                const sorting = found.body.find((line) => SORTED_CALL.test(line.text));
+                if (sorting === undefined) {
+                    return failing_line(
+                        context, found.line_number, "defines print_plan() without calling sorted() inside it",
+                        "Print the missing prerequisites in sorted order, so they come out the same on every run.",
+                    );
+                }
+                return passing_line(context, sorting.line_number);
+            }
+
+            // A missing file ends the program with sys.exit(1), from the
+            // starter's import sys, after its message. A bare exit(1) also
+            // counts, since it ends the program the same way. Returning from
+            // main() instead prints the same transcript, which is why this is
+            // a row. A bare except, or one naming Exception, also swallows the
+            // NameError from a typo, as the Find the Bug slide shows, so one
+            // anywhere zeroes the row.
+            const EXIT_ONE = /\b(?:sys\s*\.\s*)?exit\s*\(\s*1\s*\)/;
+            const EXCEPT_BARE = /^[ \t]*except\s*:/;
+            const EXCEPT_BROAD = /^[ \t]*except\s*\(?\s*(?:Base)?Exception\b/;
+            function exit_check(context) {
+                const lines = code_only(context.source).split("\n");
+                const broad = lines.findIndex((line) => EXCEPT_BARE.test(line) || EXCEPT_BROAD.test(line));
+                if (broad !== -1) {
+                    return failing_line(
+                        context, broad + 1, "catches every exception",
+                        "Name the one a missing file raises, so other bugs still show.",
+                    );
+                }
+                const exited = lines.findIndex((line) => EXIT_ONE.test(line));
+                if (exited === -1) {
+                    return {
+                        pass: false,
+                        detail: "No sys.exit(1) found. After the message for a missing file, end the program with sys.exit(1).",
+                    };
+                }
+                return passing_line(context, exited + 1);
+            }
+
+            // main() holds the program's work, and the program ends with the
+            // __main__ check calling it. That check compares strings, so it is
+            // matched with strings kept and only docstrings and comments
+            // blanked; the summary pasted at the top is a docstring, so its
+            // row name cannot pass the row. Any other line at the left margin,
+            // besides a def or an import, is code running outside a function.
+            const MAIN_GUARD = /^if\s+(?:__name__\s*==\s*(["'])__main__\1|(["'])__main__\2\s*==\s*__name__)\s*:\s*$/;
+            const MAIN_CALL = /^[ \t]+main\s*\(\s*\)\s*$/;
+            const TOP_LEVEL_ALLOWED = /^(?:def|import|from)\s/;
+            const INDENTED = /^[ \t]/;
+            function main_check(context) {
+                const blanked = code_only(context.source).split("\n");
+                if (function_body(blanked.join("\n"), "main") === null) return no_function("main()");
+                const kept = strings_kept(context.source).split("\n");
+                const guard = kept.findIndex((line) => MAIN_GUARD.test(line));
+                for (let index = 0; index < blanked.length; index++) {
+                    const line = blanked[index];
+                    if (line.trim() === "" || INDENTED.test(line)) continue;
+                    if (index === guard || TOP_LEVEL_ALLOWED.test(line)) continue;
+                    return failing_line(
+                        context, index + 1, "runs outside any function",
+                        "Move it into main(), and end the program with the last two lines of the starter code.",
+                    );
+                }
+                if (guard === -1) {
+                    return {
+                        pass: false,
+                        detail: 'No if __name__ == "__main__": line found. End the program with the last two lines of the starter code.',
+                    };
+                }
+                const call = kept.slice(guard + 1).find((line) => line.trim() !== "");
+                if (call === undefined || !MAIN_CALL.test(call)) {
+                    return failing_line(
+                        context, guard + 1, "is not followed by a call to main()",
+                        "Put main() on the line under it, indented.",
+                    );
+                }
+                return passing_line(context, guard + 1);
+            }
+
+            // The csv module and pandas do the reading and splitting this
+            // problem leans on, so either one zeroes the submission, as in
+            // w7p2. The gate scans the blanked source, so the gate's own name
+            // pasted into the docstring cannot trip it.
+            const PARSING_IMPORT = /^[ \t]*(?:import|from)\s+(?:csv|pandas)\b/;
+            function no_parsing_import_check(source) {
+                const lines = code_only(source).split("\n");
+                const index = lines.findIndex((line) => PARSING_IMPORT.test(line));
+                if (index === -1) return { pass: true, detail: "" };
+                return failing_line(
+                    { source }, index + 1, "imports csv or pandas",
+                    "Read the lines and split them yourself. Importing either one scores zero.",
+                );
+            }
+
+            // The custom rows scan the blanked source, so a row's name pasted
+            // back as a docstring line cannot trip its own check, and no name
+            // matches its own row's pattern anyway. The input row scans the
+            // raw source, and no row name contains a prompt.
+            function build_criteria(results) {
+                return [
+                    {
+                        id: "input",
+                        name: "Input handling",
+                        points: 5,
+                        description: "Source calls input() with both exact prompts from the handout.",
+                        type: "code",
+                        needles: [prompt_needles(PROMPT_FILE), prompt_needles(PROMPT_TAKEN)],
+                        mode: "all",
+                    },
+                    {
+                        id: "output",
+                        name: "Correct output",
+                        points: 35,
+                        description:
+                            "35 points split evenly across all examples, prorated by the % of lines that match exactly.",
+                        type: "output-diff",
+                        cases: CASES,
+                    },
+                    {
+                        id: "record",
+                        name: "Stores each course as a record",
+                        points: 10,
+                        description:
+                            'In read_catalog(), 5 points for a "needs" field in each record, and 5 for building it with set().',
+                        type: "custom",
+                        check: record_check,
+                    },
+                    {
+                        id: "difference",
+                        name: "Finds missing prerequisites with -",
+                        points: 10,
+                        description: "print_plan() takes the courses taken away from a course's prerequisites with - (or difference()).",
+                        type: "custom",
+                        check: difference_check,
+                    },
+                    {
+                        id: "sorted",
+                        name: "Prints the missing courses sorted",
+                        points: 5,
+                        description: "print_plan() calls sorted() on what it prints from a set.",
+                        type: "custom",
+                        check: sorted_check,
+                    },
+                    {
+                        id: "functions",
+                        name: "Functions",
+                        points: 5,
+                        description: "read_catalog() is called, returns the catalog, and prints nothing.",
+                        type: "custom",
+                        check: functions_check,
+                    },
+                    {
+                        id: "exit",
+                        name: "Exits on a missing file",
+                        points: 5,
+                        description: "A missing file ends the program with sys.exit(1), and no except catches every exception.",
+                        type: "custom",
+                        check: exit_check,
+                    },
+                    {
+                        id: "main",
+                        name: "Runs from main()",
+                        points: 5,
+                        description:
+                            'Every line runs inside a function, and the program ends with if __name__ == "__main__": calling main().',
+                        type: "custom",
+                        check: main_check,
+                    },
+                ];
+            }
+
+            // The right column only: set-0.md fills the left, and the page
+            // carries its own footer below both.
+            grader_app.init({
+                filename: "set-0.py",
+                editor: true,
+                title: "Submission",
+                subtitle: "Graded in this tab · nothing leaves your browser",
+                cases: CASES,
+                build_criteria,
+                max_auto_points: 80,
+                mount: "#grader",
+                handout: "set-0.md",
+                gates: [
+                    {
+                        name: "Does not import csv or pandas",
+                        description:
+                            "Gate: importing csv or pandas forces a total score of zero, the same as a syntax error.",
+                        check: no_parsing_import_check,
+                    },
+                ],
+            });
+        </script>
+    </body>
+</html>

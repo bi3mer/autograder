@@ -328,9 +328,13 @@ fix each example's secret.
 A program that reads a file needs that file to exist, so a case can carry
 `files`: `{ "groceries.txt": "milk\neggs\n" }`. Each run starts in a fresh,
 empty directory holding only its own case's files, and the runner deletes the
-directory afterwards, so nothing one case writes is left for the next. Names
-must be bare filenames, without a path. In the editor, "Input of my own" gets
-every case's files, so a student can type any example's filename.
+directory afterwards, so nothing one case writes is left for the next. A name
+can sit in folders, as `notes/cs230.txt` does, and the runner makes the folders
+before writing the file. A name must be relative and use `/`, with no empty,
+`.`, or `..` part, so no case can write outside its run's directory. In the
+editor, "Input of my own" gets every case's files, so a student can type any
+example's filename; two cases that share a folder name get one merged folder
+there, so `cs230/os-0.html` gives each case a folder of its own.
 `cs230/w7p2.html` fetches its files from beside the page, which keeps the
 copies students download and the copies the grader uses the same.
 

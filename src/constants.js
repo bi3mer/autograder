@@ -45,8 +45,12 @@ export const STDIN_LINE_COUNT_MAX = 1024;
 /** Values `random.randint` hands back in one run, in call order. */
 export const RANDINT_VALUE_COUNT_MAX = 1024;
 
-/** Files one run can find in its working directory before it starts. */
-export const CASE_FILE_COUNT_MAX = 16;
+/**
+ * Files one run can find in its working directory before it starts. The
+ * editor's "Input of my own" gets every case's files at once, so this bounds
+ * the whole assignment's files, not one case's.
+ */
+export const CASE_FILE_COUNT_MAX = 64;
 
 /** One of those files, in characters. */
 export const CASE_FILE_CHARS_MAX = 1024 * 1024;

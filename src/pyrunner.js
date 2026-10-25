@@ -107,8 +107,26 @@ function check_filename(filename) {
 }
 
 /**
- * A case's files as `[name, text]` pairs, after checking each name is a bare
- * filename: a path could write outside the run's own directory.
+ * A case file's name, which may sit in folders, as in `notes/cs230.txt`. A
+ * path could otherwise write outside the run's own directory, so it must be
+ * relative, use `/` between folders, and have no empty, `.`, or `..` part.
+ */
+function check_case_path(file_name, name) {
+  const path = assert_string(file_name, `${name} name`, FILENAME_CHARS_MAX);
+  assert(path.length > 0, `${name}: a file name must not be empty`);
+  assert(!path.includes("\\"), `${name}: path must use / between folders: ${path}`);
+  assert(!path.startsWith("/"), `${name}: path must be relative: ${path}`);
+  for (const part of path.split("/")) {
+    assert(part !== "" && part !== "." && part !== "..", `${name}: path must not climb or skip a folder: ${path}`);
+  }
+  return path;
+}
+
+/**
+ * A case's files as `[name, text]` pairs, after checking each name is a safe
+ * relative path. A name that is also a folder of another, as `notes` is of
+ * `notes/a.txt`, could not be written, so it is refused here rather than as a
+ * Python error from inside the driver.
  */
 export function check_files(files, name) {
   assert(
@@ -117,8 +135,15 @@ export function check_files(files, name) {
   );
   const pairs = assert_array(Object.entries(files), name, CASE_FILE_COUNT_MAX);
   for (const [file_name, text] of pairs) {
-    check_filename(file_name);
+    check_case_path(file_name, name);
     assert_string(text, `${name}["${file_name}"]`, CASE_FILE_CHARS_MAX);
+  }
+  for (const [file_name] of pairs) {
+    const parts = file_name.split("/");
+    for (let depth = 1; depth < parts.length; depth++) {
+      const folder = parts.slice(0, depth).join("/");
+      assert(!Object.hasOwn(files, folder), `${name}: "${folder}" is both a file and a folder`);
+    }
   }
   return pairs;
 }
@@ -217,10 +242,11 @@ export function flake8_failure_reason() {
  * interpreter, so the real function goes back in the `finally`.
  *
  * `file_pairs` are `[name, text]` files written into a fresh empty directory
- * that the run starts in, so `open("data.txt")` finds this case's copy. The
+ * that the run starts in, so `open("data.txt")` finds this case's copy. A
+ * name with folders in it, `notes/a.txt`, gets its folders made first. The
  * filesystem outlives the run for the same reason `random` does: without a
  * directory per run, a file one case wrote would still be there for the next
- * case to read. The `finally` steps back out and deletes it.
+ * case to read. The `finally` steps back out and deletes it, folders and all.
  */
 function build_run_python(code, stdin_lines, filename, timeout_ms, randint_values, file_pairs) {
   assert(typeof code === "string", "build_run_python: code must be a string");
@@ -296,6 +322,8 @@ _home = os.getcwd()
 _work = tempfile.mkdtemp()
 os.chdir(_work)
 for _file_name, _file_text in json.loads(${embed(file_pairs)}):
+    if os.path.dirname(_file_name):
+        os.makedirs(os.path.dirname(_file_name), exist_ok=True)
     with open(_file_name, "w") as _fh:
         _fh.write(_file_text)
 

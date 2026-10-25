@@ -1,0 +1,507 @@
+<!doctype html>
+<html lang="en">
+    <head>
+        <meta charset="UTF-8" />
+        <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+        <title>Search My Notes Autograder</title>
+        <link rel="stylesheet" href="../css/a1.css" />
+        <script src="https://cdn.jsdelivr.net/pyodide/v0.26.2/full/pyodide.js"></script>
+    </head>
+    <body>
+        <div class="split">
+            <section class="sheet">
+                <!-- The whole problem statement, fetched from os-0.md and
+                     rendered by src/markdown.js. The file is the handout,
+                     readable on its own. -->
+                <div class="prose" id="handout"></div>
+            </section>
+
+            <section id="grader"></section>
+        </div>
+        <footer>bi3mer · Runs Python via Pyodide</footer>
+
+        <script type="module">
+            import { grader_app } from "../src/main.js";
+            import { assert } from "../src/assert.js";
+
+            // The prompts drive both the input() needles the rubric looks for
+            // and the transcript each case expects, so the wording is written
+            // once here. The handout quotes them again in os-0.md, which is
+            // the one place the two can drift.
+            const PROMPT_FOLDER = "Folder: ";
+            const PROMPT_WORD = "Search for: ";
+            const NO_FOLDER = "No folder named ";
+
+            // The handout's files live in os-0/ beside this page, and
+            // os-0/os-0.zip, which the handout links, holds the same files.
+            // The examples fetch them from there, so the copy a student
+            // unzips and the copy the grader opens are the same bytes. After
+            // editing one, remake the zip from cs230/ with
+            // `zip -X -r os-0/os-0.zip os-0/README.md os-0/notes`.
+            const FILES_DIR = "os-0/";
+            const HANDOUT_FILES = [
+                "README.md",
+                "notes/cs230.txt",
+                "notes/groceries.txt",
+                "notes/history.txt",
+                "notes/todo.md",
+                "notes/old/cs171.txt",
+            ];
+
+            // Every name, file, and word is printable ASCII, and files end
+            // lines with \n alone. On that, Python's lower() and JS's
+            // toLowerCase() agree, so do sorted() and JS's sort, and a file
+            // splits into the same lines in both languages.
+            const PRINTABLE = /^[\x20-\x7e]*$/;
+            const PRINTABLE_LINES = /^[\x20-\x7e\n]*$/;
+
+            // A case's files are its run's whole directory, so a folder exists
+            // only by holding something, and os.path.isdir() is true of a name
+            // exactly when some file sits under it.
+            function is_folder(files, name) {
+                return Object.keys(files).some((path) => path.startsWith(name + "/"));
+            }
+
+            // What sorted(os.listdir(folder)) gives, as [name, is_file] pairs:
+            // each file directly in the folder, and each folder in it once.
+            function listing(files, folder) {
+                const entries = new Map();
+                for (const path of Object.keys(files)) {
+                    if (!path.startsWith(folder + "/")) continue;
+                    const rest = path.slice(folder.length + 1);
+                    entries.set(rest.split("/")[0], !rest.includes("/"));
+                }
+                return [...entries].sort(([a], [b]) => (a < b ? -1 : 1));
+            }
+
+            // How many of the file's lines hold the word, ignoring case. A
+            // file that ends with a newline has no line after it, so that
+            // last empty piece of the split goes.
+            function count_lines(text, word) {
+                const lines = text === "" ? [] : text.split("\n");
+                if (lines.at(-1) === "") lines.pop();
+                const target = word.toLowerCase();
+                return lines.filter((line) => line.toLowerCase().includes(target)).length;
+            }
+
+            // A case is the answers typed at the folder prompt, every one a
+            // miss but the last, then the word, and the files the run starts
+            // with. The transcript is worked out the way the handout
+            // describes: a miss prints its line, and each note in the folder,
+            // in sorted order, prints its name and count. An answer is a bare
+            // name, since "notes/" or "." are folders to Python that the
+            // checks here would not recognise.
+            function notes_case(name, answers, word, files) {
+                for (const [path, text] of Object.entries(files)) {
+                    assert(PRINTABLE.test(path) && PRINTABLE_LINES.test(text), `notes_case "${name}": ${path} must be printable ASCII`);
+                }
+                assert(PRINTABLE.test(word) && word !== "", `notes_case "${name}": the word must be printable and not blank`);
+                const expected_lines = [];
+                answers.forEach((answer, index) => {
+                    assert(PRINTABLE.test(answer) && !answer.includes("/"), `notes_case "${name}": "${answer}" must be a bare name`);
+                    assert(answer !== "." && answer !== "..", `notes_case "${name}": "${answer}" is a folder Python finds`);
+                    const found = is_folder(files, answer);
+                    assert(found === (index === answers.length - 1), `notes_case "${name}": only the last answer names a folder`);
+                    expected_lines.push(PROMPT_FOLDER + answer);
+                    if (!found) expected_lines.push(`${NO_FOLDER}${answer}.`);
+                });
+                expected_lines.push(PROMPT_WORD + word);
+                const folder = answers.at(-1);
+                for (const [entry, is_file] of listing(files, folder)) {
+                    if (!is_file || !entry.endsWith(".txt")) continue;
+                    expected_lines.push(`${entry}: ${count_lines(files[`${folder}/${entry}`], word)}`);
+                }
+                return { name, stdin_lines: [...answers, word], files, expected_lines };
+            }
+
+            const NOTES = Object.fromEntries(
+                await Promise.all(
+                    HANDOUT_FILES.map(async (path) => {
+                        const response = await fetch(FILES_DIR + path);
+                        assert(response.ok, `${path} answered ${response.status}`);
+                        return [path, await response.text()];
+                    }),
+                ),
+            );
+
+            // Cases 1 and 2 are the handout's examples: two misses, one of
+            // them a file, and then the word in capitals. In notes/, todo.md
+            // catches a missing endswith() check, and the folder old catches
+            // a missing isfile(). The rest have a folder each, since the
+            // editor's "Input of my own" merges every case's files into one
+            // directory. Case 3's folder named archive.txt gets past
+            // endswith() alone, and opening it raises IsADirectoryError, as
+            // on the Problem 2: Find the Bug slide. Case 4 has lines with the
+            // word twice, which count once. Case 5 writes its notes out of
+            // order, and Pyodide's filesystem lists a folder in the order its
+            // files were written, so a missing sorted() prints them in that
+            // order. Case 6 has no notes at all, only a .md file and a .txt
+            // inside a folder.
+            const CASES = [
+                notes_case("Example 1 — two misses, then notes", ["notse", "README.md", "notes"], "exam", NOTES),
+                notes_case("Example 2 — the word in capitals", ["notes"], "EXAM", NOTES),
+                notes_case("Example 3 — a folder named archive.txt", ["class_notes"], "exam", {
+                    "class_notes/archive.txt/week1.txt": "Exam 1 is on Friday\n",
+                    "class_notes/biology.txt": "Cells and DNA\nLab report due Monday\nExam on cells next week\n",
+                    "class_notes/math.txt": "Exams cover chapters 1 to 3\nBring a calculator\n",
+                }),
+                notes_case("Example 4 — the word twice on one line", ["lab_notes"], "loop", {
+                    "lab_notes/lab1.txt": "for loops\nA loop inside a loop\nwhile True\n",
+                    "lab_notes/lab2.txt": "Loop over a list\nLOOPS AND MORE LOOPS\nlists\n",
+                }),
+                notes_case("Example 5 — notes written out of order", ["term_notes"], "quiz", {
+                    "term_notes/week3.txt": "Quiz on loops\n",
+                    "term_notes/week1.txt": "No quiz this week\nRead chapter 1\n",
+                    "term_notes/week2.txt": "Quiz on strings\nQuiz retake on Friday\n",
+                }),
+                notes_case("Example 6 — a folder with no notes", ["drafts"], "exam", {
+                    "drafts/essay.md": "Exam essay outline\n",
+                    "drafts/old/exam.txt": "Exam notes\n",
+                }),
+            ];
+
+            // Both quote styles, and with or without the trailing space, so a
+            // student is graded on the prompt's wording rather than on which
+            // quote character they reached for.
+            function prompt_needles(prompt) {
+                const trimmed = prompt.trimEnd();
+                return [
+                    `input("${prompt}")`,
+                    `input('${prompt}')`,
+                    `input("${trimmed}")`,
+                    `input('${trimmed}')`,
+                ];
+            }
+
+            // Strings and comments are blanked before scanning, as in w6p1,
+            // so the summary pasted in as a docstring cannot read as code.
+            // Blanking keeps every newline, so line numbers still match.
+            const TRIPLE_QUOTED = /"""[\s\S]*?"""|'''[\s\S]*?'''/g;
+            const SINGLE_QUOTED = /"(?:[^"\\\n]|\\.)*"|'(?:[^'\\\n]|\\.)*'/g;
+            const COMMENT = /#[^\n]*/g;
+            function code_only(source) {
+                return source
+                    .replace(TRIPLE_QUOTED, (text) => text.replace(/[^\n]/g, ""))
+                    .replace(SINGLE_QUOTED, '""')
+                    .replace(COMMENT, "");
+            }
+
+            // code_only() blanks an f-string's fields too, which hides a call
+            // made inside one, as in f"{count_matches(path, word)}". This
+            // keeps the expressions inside an f-string's braces and blanks
+            // the rest, for the checks that look for a call. Each string
+            // stays on its own line, so line numbers still match.
+            const PREFIXED_STRING = /(\b[rRbBuUfF]{1,2})?("(?:[^"\\\n]|\\.)*"|'(?:[^'\\\n]|\\.)*')/g;
+            const FSTRING_FIELD = /\{([^{}]*)\}/g;
+            function code_and_fields(source) {
+                return source
+                    .replace(TRIPLE_QUOTED, (text) => text.replace(/[^\n]/g, ""))
+                    .replace(PREFIXED_STRING, (text, prefix) => {
+                        if (prefix === undefined || !/f/i.test(prefix)) return '""';
+                        const fields = [...text.matchAll(FSTRING_FIELD)].map((field) => field[1]);
+                        return `"" ${fields.join(" ")} ""`;
+                    })
+                    .replace(COMMENT, "");
+            }
+
+            // Docstrings and comments blanked and every other string kept, for
+            // the checks that need to see what a string holds.
+            function strings_kept(source) {
+                return source.replace(TRIPLE_QUOTED, (text) => text.replace(/[^\n]/g, "")).replace(COMMENT, "");
+            }
+
+            function quote_line(context, line_number) {
+                return context.source.split("\n")[line_number - 1].trim();
+            }
+
+            function failing_line(context, line_number, reason, advice) {
+                return {
+                    pass: false,
+                    detail:
+                        `Line ${line_number} ${reason} ("${quote_line(context, line_number)}"). ` +
+                        advice,
+                };
+            }
+
+            function passing_line(context, line_number) {
+                return {
+                    pass: true,
+                    detail: `Line ${line_number}: "${quote_line(context, line_number)}".`,
+                };
+            }
+
+            // The def of `name` and its body, as `{ line_number, body }`, or
+            // null when the source defines no such function. The body is
+            // every line after the def that is blank or indented past it, up
+            // to the first line that is not, which is where Python ends the
+            // block.
+            const LEADING_SPACE = /^[ \t]*/;
+            function function_body(source, name) {
+                const def = new RegExp(`^([ \\t]*)def\\s+${name}\\s*\\(`);
+                const lines = source.split("\n");
+                for (let index = 0; index < lines.length; index++) {
+                    const match = lines[index].match(def);
+                    if (match === null) continue;
+                    const def_indent = match[1].length;
+                    const body = [];
+                    for (let next = index + 1; next < lines.length; next++) {
+                        const text = lines[next];
+                        const indent = text.match(LEADING_SPACE)[0].length;
+                        if (text.trim() !== "" && indent <= def_indent) break;
+                        body.push({ line_number: next + 1, text });
+                    }
+                    return { line_number: index + 1, body };
+                }
+                return null;
+            }
+
+            function no_function(signature) {
+                return {
+                    pass: false,
+                    detail: `No ${signature.split("(")[0]}() function found. Define it with def ${signature}:.`,
+                };
+            }
+
+            // The two functions that hand an answer back are half this row
+            // each: defined, returning their answer, and called somewhere
+            // besides their own def. ask_folder() prints a line for each
+            // miss, so it is the one allowed to print. One long function
+            // prints the same transcript, which is why this is a row.
+            // search_notes() prints and returns nothing, and the isfile()
+            // row already needs it defined.
+            const PRINT_CALL = /\bprint\s*\(/;
+            const RETURN_VALUE = /^[ \t]*return\s+\S/;
+            const FUNCTIONS = [
+                { signature: "ask_folder()", may_print: true },
+                { signature: "count_matches(path, word)", may_print: false },
+            ];
+            function function_problem(source, calls_source, { signature, may_print }) {
+                const name = signature.split("(")[0];
+                const found = function_body(source, name);
+                if (found === null) return `No ${name}() found (define it with def ${signature}:)`;
+                const printed = found.body.find((line) => PRINT_CALL.test(line.text));
+                if (!may_print && printed !== undefined) {
+                    return `${name}() calls print() on line ${printed.line_number} (return the answer instead)`;
+                }
+                if (!found.body.some((line) => RETURN_VALUE.test(line.text))) {
+                    return `${name}() never returns a value`;
+                }
+                const call = new RegExp(`\\b${name}\\s*\\(`);
+                const called = calls_source
+                    .split("\n")
+                    .some((line, index) => index !== found.line_number - 1 && call.test(line));
+                if (!called) return `${name}() is defined but never called`;
+                return null;
+            }
+
+            function functions_check(context) {
+                const source = code_only(context.source);
+                const calls_source = code_and_fields(context.source);
+                const problems = FUNCTIONS.map((spec) => function_problem(source, calls_source, spec)).filter(
+                    (problem) => problem !== null,
+                );
+                const earned = (10 * (FUNCTIONS.length - problems.length)) / FUNCTIONS.length;
+                if (problems.length === 0) {
+                    return { earned, detail: "Both are defined, called, and return their answers." };
+                }
+                return { earned, detail: problems.map((problem) => `${problem}.`).join(" ") };
+            }
+
+            // os.path.join() puts in the separator the computer uses. Adding
+            // "/" to a string with + or between an f-string's fields, or
+            // joining with "/".join(), works on a Mac and fails elsewhere, and
+            // prints the same transcript here, so a line doing it fails the
+            // row even when join() is called too.
+            const JOIN_CALL = /\bos\s*\.\s*path\s*\.\s*join\s*\(/;
+            const SLASH_ADDED = [
+                /\+\s*[rRbBuUfF]{0,2}["'](?:\/|\\\\)/,
+                /["'](?:[^"'\n\\]|\\.)*?(?:\/|\\\\)["']\s*\+/,
+                /\}(?:\/|\\\\)\{/,
+                /["'](?:\/|\\\\)["']\s*\.\s*join\s*\(/,
+            ];
+            function join_check(context) {
+                const kept = strings_kept(context.source).split("\n");
+                const added = kept.findIndex((line) => SLASH_ADDED.some((pattern) => pattern.test(line)));
+                if (added !== -1) {
+                    return failing_line(
+                        context, added + 1, "builds a path with a slash",
+                        "Build it with os.path.join(folder, name), which uses the right separator on every computer.",
+                    );
+                }
+                const lines = code_and_fields(context.source).split("\n");
+                const joined = lines.findIndex((line) => JOIN_CALL.test(line));
+                if (joined === -1) {
+                    return {
+                        pass: false,
+                        detail: "No os.path.join() call found. Build each note's path from the folder and its name with it.",
+                    };
+                }
+                return passing_line(context, joined + 1);
+            }
+
+            // A name in the folder can be another folder, which open() cannot
+            // read. Checking os.path.isfile() in search_notes() skips it. A
+            // check on the name alone, or isdir() turned around, prints the
+            // same transcript on most folders, which is why this is a row.
+            const ISFILE_CALL = /\bos\s*\.\s*path\s*\.\s*isfile\s*\(/;
+            function isfile_check(context) {
+                const found = function_body(code_and_fields(context.source), "search_notes");
+                if (found === null) return no_function("search_notes(folder, word)");
+                const checked = found.body.find((line) => ISFILE_CALL.test(line.text));
+                if (checked === undefined) {
+                    return failing_line(
+                        context, found.line_number, "defines search_notes() without calling os.path.isfile() inside it",
+                        "Skip each name whose path is not a file before opening it.",
+                    );
+                }
+                return passing_line(context, checked.line_number);
+            }
+
+            // os.listdir() promises no order, and a student's own computer may
+            // list a folder sorted where the grader's does not. Passes for
+            // sorted(os.listdir(...)), or for os.listdir() stored in a name
+            // that sorted() is later called on.
+            const SORTED_LISTDIR = /\bsorted\s*\(\s*os\s*\.\s*listdir\s*\(/;
+            const LISTDIR_ASSIGNMENT = /^[ \t]*([A-Za-z_]\w*)\s*=\s*os\s*\.\s*listdir\s*\(/;
+            function sorted_check(context) {
+                const lines = code_and_fields(context.source).split("\n");
+                const direct = lines.findIndex((line) => SORTED_LISTDIR.test(line));
+                if (direct !== -1) return passing_line(context, direct + 1);
+                for (const line of lines) {
+                    const listed = line.match(LISTDIR_ASSIGNMENT);
+                    if (listed === null) continue;
+                    const sorting = new RegExp(`\\bsorted\\s*\\(\\s*${listed[1]}\\s*\\)`);
+                    const sorted_at = lines.findIndex((other) => sorting.test(other));
+                    if (sorted_at !== -1) return passing_line(context, sorted_at + 1);
+                }
+                return {
+                    pass: false,
+                    detail: "No sorted() call on what os.listdir() returns. Go through the names in sorted order, so the notes print in order.",
+                };
+            }
+
+            // main() holds the program's work, and the program ends with the
+            // __main__ check calling it. That check compares strings, so it is
+            // matched with strings kept and only docstrings and comments
+            // blanked; the summary pasted at the top is a docstring, so its
+            // row name cannot pass the row. Any other line at the left margin,
+            // besides a def or an import, is code running outside a function.
+            const MAIN_GUARD = /^if\s+(?:__name__\s*==\s*(["'])__main__\1|(["'])__main__\2\s*==\s*__name__)\s*:\s*$/;
+            const MAIN_CALL = /^[ \t]+main\s*\(\s*\)\s*$/;
+            const TOP_LEVEL_ALLOWED = /^(?:def|import|from)\s/;
+            const INDENTED = /^[ \t]/;
+            function main_check(context) {
+                const blanked = code_only(context.source).split("\n");
+                if (function_body(blanked.join("\n"), "main") === null) return no_function("main()");
+                const kept = strings_kept(context.source).split("\n");
+                const guard = kept.findIndex((line) => MAIN_GUARD.test(line));
+                for (let index = 0; index < blanked.length; index++) {
+                    const line = blanked[index];
+                    if (line.trim() === "" || INDENTED.test(line)) continue;
+                    if (index === guard || TOP_LEVEL_ALLOWED.test(line)) continue;
+                    return failing_line(
+                        context, index + 1, "runs outside any function",
+                        "Move it into main(), and end the program with the last two lines of the starter code.",
+                    );
+                }
+                if (guard === -1) {
+                    return {
+                        pass: false,
+                        detail: 'No if __name__ == "__main__": line found. End the program with the last two lines of the starter code.',
+                    };
+                }
+                const call = kept.slice(guard + 1).find((line) => line.trim() !== "");
+                if (call === undefined || !MAIN_CALL.test(call)) {
+                    return failing_line(
+                        context, guard + 1, "is not followed by a call to main()",
+                        "Put main() on the line under it, indented.",
+                    );
+                }
+                return passing_line(context, guard + 1);
+            }
+
+            // The custom rows scan the blanked source, so a row's name pasted
+            // back as a docstring line cannot trip its own check, and no name
+            // matches its own row's pattern anyway. The input row scans the
+            // raw source, and no row name contains a prompt.
+            function build_criteria(results) {
+                return [
+                    {
+                        id: "input",
+                        name: "Input handling",
+                        points: 5,
+                        description: "Source calls input() with both exact prompts from the handout.",
+                        type: "code",
+                        needles: [prompt_needles(PROMPT_FOLDER), prompt_needles(PROMPT_WORD)],
+                        mode: "all",
+                    },
+                    {
+                        id: "output",
+                        name: "Correct output",
+                        points: 35,
+                        description:
+                            "35 points split evenly across all examples, prorated by the % of lines that match exactly.",
+                        type: "output-diff",
+                        cases: CASES,
+                    },
+                    {
+                        id: "functions",
+                        name: "Functions",
+                        points: 10,
+                        description:
+                            "5 points each for ask_folder() and count_matches(): defined, called, and returning their answer. count_matches() prints nothing.",
+                        type: "custom",
+                        check: functions_check,
+                    },
+                    {
+                        id: "join",
+                        name: "Builds paths with join()",
+                        points: 10,
+                        description: "Each note's path comes from os.path.join(), and no path is built by adding a slash.",
+                        type: "custom",
+                        check: join_check,
+                    },
+                    {
+                        id: "isfile",
+                        name: "Skips folders with isfile()",
+                        points: 10,
+                        description: "search_notes() calls os.path.isfile() to skip anything that is not a file.",
+                        type: "custom",
+                        check: isfile_check,
+                    },
+                    {
+                        id: "sorted",
+                        name: "Lists the folder with sorted()",
+                        points: 5,
+                        description: "The names from os.listdir() go through sorted().",
+                        type: "custom",
+                        check: sorted_check,
+                    },
+                    {
+                        id: "main",
+                        name: "Runs from main()",
+                        points: 5,
+                        description:
+                            'Every line runs inside a function, and the program ends with if __name__ == "__main__": calling main().',
+                        type: "custom",
+                        check: main_check,
+                    },
+                ];
+            }
+
+            // The right column only: os-0.md fills the left, and the page
+            // carries its own footer below both.
+            grader_app.init({
+                filename: "os-0.py",
+                editor: true,
+                title: "Submission",
+                subtitle: "Graded in this tab · nothing leaves your browser",
+                cases: CASES,
+                build_criteria,
+                max_auto_points: 80,
+                mount: "#grader",
+                handout: "os-0.md",
+            });
+        </script>
+    </body>
+</html>
